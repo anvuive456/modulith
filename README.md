@@ -280,6 +280,34 @@ own screen and demonstrating a different piece of the framework —
 nested modules via `ChildModuleView`, and controller-owned
 `TextEditingController`s keeping every view stateless.
 
+## Routing
+
+Routing lives in a separate package, [`modulith_router`](packages/modulith_router),
+so an app that doesn't need it doesn't pay for it. It builds on Navigation 2.0
+and needs no changes to this package: a route mounts a `Module` whose scope
+nests under the route above it, and `RoutingView` is the outlet those children
+render into.
+
+```dart
+RouterModule(
+  routes: [
+    ModuleRoute(
+      path: '/',
+      childRouting: ChildRouting.outlet,          // children render in a RoutingView
+      builder: (route) => ShellModule(),
+      children: [
+        ModuleRoute(
+          path: 'todos/:id',
+          builder: (route) => TodoModule(todoId: route.requireParam('id')),
+        ),
+      ],
+    ),
+  ],
+  appBuilder: (context, routerConfig) =>
+      MaterialApp.router(routerConfig: routerConfig),
+)
+```
+
 ## Performance
 
 Three layers, in order of how much they're worth trusting:

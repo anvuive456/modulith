@@ -1,0 +1,25 @@
+name: modulith_router
+description: "Navigation 2.0 routing for modulith: nested route modules mounted through RoutingView outlets, with guards, deep links and scoped DI."
+version: 0.1.0
+
+# Depends on modulith by path while both live in this repo. Drop this and
+# switch to a hosted constraint before publishing.
+publish_to: none
+
+environment:
+  sdk: ^3.12.2
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.9.0
+  modulith:
+    path: ../../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
