@@ -8,6 +8,25 @@ real `Navigator`, so children form a navigable stack.
 The router needs **no changes to modulith itself**: it is an ordinary module
 declaring an ordinary service.
 
+An app that routes depends on this package only — it re-exports
+`package:modulith/modulith.dart`, so one import gives you `Module`,
+`Controller`, `Signal` and the routing API together:
+
+```yaml
+dependencies:
+  modulith_router: ^0.1.0
+```
+
+```dart
+import 'package:modulith_router/modulith_router.dart';
+```
+
+The dependency points one way and stays that way: `modulith` never depends on
+this package, so an app that doesn't route pulls in nothing of it. Making the
+core re-export the router instead would be a dependency cycle — pub tolerates
+it locally, but the two packages could never be published against each other
+without leaving users in constraint conflicts.
+
 ## Quick start
 
 ```dart

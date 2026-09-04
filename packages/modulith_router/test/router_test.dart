@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:modulith/modulith.dart';
 import 'package:modulith_router/modulith_router.dart';
 
 /// Records module lifecycle so a test can assert what was torn down.
