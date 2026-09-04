@@ -1,0 +1,37 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Dart/Flutter
+.dart_tool/
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+doc/api/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# This is a library package, so the lockfile is not checked in — see
+# https://dart.dev/guides/libraries/private-files
+pubspec.lock
+
+# FVM Version Cache
+.fvm/
+
+# Local tooling
+.claude/
