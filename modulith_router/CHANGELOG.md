@@ -1,3 +1,9 @@
+## 0.1.1
+
+* Add an example: a single-file tour of persistent branch tabs, a push that
+  answers with the value it is popped with, and a guard that redirects out of
+  a branch.
+
 ## 0.1.0
 
 First release.
