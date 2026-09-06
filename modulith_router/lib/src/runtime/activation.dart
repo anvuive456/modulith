@@ -48,14 +48,17 @@ class RouteActivation {
   /// own view instead of onto the same [Navigator].
   bool get opensOutlet => match.definition.childRouting == ChildRouting.outlet;
 
+  /// Whether this route hosts persistent navigation branches.
+  bool get opensBranches =>
+      match.definition.childRouting == ChildRouting.branches;
+
+  /// Whether this activation starts a child navigator boundary.
+  bool get opensNavigationBoundary => opensOutlet || opensBranches;
+
   /// Rebinds this activation to a new match when it is reused across a
   /// navigation.
   @internal
-  void update({
-    required RouteMatch match,
-    required Uri uri,
-    Object? extra,
-  }) {
+  void update({required RouteMatch match, required Uri uri, Object? extra}) {
     this.match = match;
     route.update(match: match, uri: uri, extra: extra);
   }
@@ -76,10 +79,15 @@ class RouteFrame {
   RouteFrame({
     required this.id,
     required this.uri,
+    required this.matches,
     required this.activations,
+    this.renderStart = 0,
+    this.anchorActivationId,
     this.extra,
     this.completer,
-  }) : segments = _split(activations);
+  }) : assert(renderStart >= 0 && renderStart <= activations.length),
+       assert(matches.length == activations.length || activations.isEmpty),
+       segments = _split(activations.skip(renderStart).toList());
 
   /// Unique per frame, so an error page gets a stable key too.
   final int id;
@@ -87,9 +95,26 @@ class RouteFrame {
   /// The location this frame represents.
   final Uri uri;
 
+  /// The complete matched chain for [uri], including reused ancestors that
+  /// this frame does not render itself.
+  final List<RouteMatch> matches;
+
   /// The matched chain, root first. Empty when nothing matched, which is
   /// what renders the error page.
   final List<RouteActivation> activations;
+
+  /// The first activation owned and rendered by this frame. Activations before
+  /// this index are shared ancestors that locate an imperative push inside an
+  /// already-mounted outlet.
+  final int renderStart;
+
+  /// The activation whose `RoutingView` renders this frame, or `null` for the
+  /// root navigator.
+  final int? anchorActivationId;
+
+  /// Activations for which this frame owns pages and module lifecycles.
+  Iterable<RouteActivation> get renderedActivations =>
+      activations.skip(renderStart);
 
   /// The activations split into outlet segments: `segments[0]` renders on
   /// the enclosing [Navigator], `segments[1]` inside the `RoutingView` of
@@ -107,15 +132,14 @@ class RouteFrame {
   bool get isError => activations.isEmpty;
 
   /// The chain's last activation, or `null` for an error frame.
-  RouteActivation? get leaf =>
-      activations.isEmpty ? null : activations.last;
+  RouteActivation? get leaf => activations.isEmpty ? null : activations.last;
 
   static List<List<RouteActivation>> _split(List<RouteActivation> chain) {
     final segments = <List<RouteActivation>>[];
     var current = <RouteActivation>[];
     for (final activation in chain) {
       current.add(activation);
-      if (activation.opensOutlet) {
+      if (activation.opensNavigationBoundary) {
         segments.add(List.unmodifiable(current));
         current = <RouteActivation>[];
       }

@@ -1,0 +1,6 @@
+# Local development only: builds this package against the modulith sources in
+# this repo instead of the published version. Not part of the published
+# archive, so it can't affect anyone depending on modulith_router.
+dependency_overrides:
+  modulith:
+    path: ../modulith

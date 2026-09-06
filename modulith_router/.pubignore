@@ -1,0 +1,14 @@
+# A .pubignore replaces .gitignore for publishing, so everything that must
+# stay out of the archive has to be listed here, not just the extras.
+.dart_tool/
+.fvm/
+.idea/
+build/
+coverage/
+pubspec.lock
+*.iml
+.DS_Store
+
+# Points `modulith` at ../.. for work inside this repo, which would be a
+# broken dependency for anyone installing from pub.dev.
+pubspec_overrides.yaml

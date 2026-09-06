@@ -1,4 +1,4 @@
-## 0.0.1
+## 0.1.0
 
 * Declare module views, controllers, services, and children through getters.
 * Add singleton and factory `Provider` registrations.

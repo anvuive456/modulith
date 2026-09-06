@@ -3,6 +3,7 @@ import 'package:modulith/modulith.dart';
 
 import '../model/route_definition.dart';
 import '../runtime/activation.dart';
+import '../runtime/navigation_tree.dart';
 import '../runtime/router_service.dart';
 import 'router_scope.dart';
 
@@ -20,7 +21,8 @@ enum OutletMode {
 /// The routing outlet: where a route's children are rendered.
 ///
 /// Put one in the view of a route declared with
-/// [ChildRouting.outlet] and its matched children appear there — the
+/// [ChildRouting.outlet] or [ChildRouting.branches] and its matched children
+/// appear there — the
 /// equivalent of Angular's `<router-outlet>`, except that in
 /// [OutletMode.stack] the outlet is a real [Navigator], so the children form
 /// a navigable stack rather than a single swapped widget.
@@ -53,6 +55,8 @@ class RoutingView extends StatefulWidget {
 
 class _RoutingViewState extends State<RoutingView> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  final Map<String, GlobalKey<NavigatorState>> _branchNavigatorKeys = {};
+  final Map<String, HeroController> _branchHeroControllers = {};
 
   /// Its own, because a [HeroController] cannot be shared between
   /// navigators and nested outlets each have one.
@@ -61,20 +65,29 @@ class _RoutingViewState extends State<RoutingView> {
 
   RouterService? _service;
   int? _depth;
+  int? _ownerActivationId;
+  bool _isRoot = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final service = RouterScope.of(context).service;
-    final depth = OutletScope.maybeOf(context)?.depth ?? 0;
-    if (identical(service, _service) && depth == _depth) return;
+    final outlet = OutletScope.maybeOf(context);
+    final depth = outlet?.depth ?? 0;
+    final ownerActivationId = outlet?.ownerActivationId;
+    final isRoot = outlet?.isRoot ?? false;
+    if (identical(service, _service) &&
+        depth == _depth &&
+        ownerActivationId == _ownerActivationId &&
+        isRoot == _isRoot) {
+      return;
+    }
 
     _service?.unregisterOutlet(this);
     _service = service;
     _depth = depth;
-    if (widget.mode == OutletMode.stack) {
-      service.registerOutlet(this, _navigatorKey, depth);
-    }
+    _ownerActivationId = ownerActivationId;
+    _isRoot = isRoot;
   }
 
   @override
@@ -105,6 +118,16 @@ class _RoutingViewState extends State<RoutingView> {
       return _contentFor(context, scope.service, slots.last, outlet.depth);
     }
 
+    final ownerId = outlet.ownerActivationId;
+    final branches = ownerId == null
+        ? null
+        : scope.service.branchesForOutlet(ownerId);
+    if (branches != null) {
+      return _buildBranches(context, scope.service, branches, outlet.depth);
+    }
+
+    _registerNavigator(scope.service, _navigatorKey, ownerId);
+
     return HeroControllerScope(
       controller: _heroController,
       child: Navigator(
@@ -119,6 +142,57 @@ class _RoutingViewState extends State<RoutingView> {
     );
   }
 
+  Widget _buildBranches(
+    BuildContext context,
+    RouterService service,
+    NavigationBranchOutlet outlet,
+    int depth,
+  ) {
+    final activeKey = _branchNavigatorKeys.putIfAbsent(
+      outlet.activeBranch,
+      GlobalKey<NavigatorState>.new,
+    );
+    _registerNavigator(service, activeKey, _ownerActivationId);
+
+    return IndexedStack(
+      index: outlet.names.indexOf(outlet.activeBranch),
+      children: [
+        for (final name in outlet.names)
+          if (outlet.navigators[name] case final navigator?)
+            HeroControllerScope(
+              controller: _branchHeroControllers.putIfAbsent(
+                name,
+                MaterialApp.createMaterialHeroController,
+              ),
+              child: Navigator(
+                key: _branchNavigatorKeys.putIfAbsent(
+                  name,
+                  GlobalKey<NavigatorState>.new,
+                ),
+                observers: name == outlet.activeBranch
+                    ? widget.observers
+                    : const [],
+                onDidRemovePage: service.handlePageRemoved,
+                pages: [
+                  for (final page in navigator.pages)
+                    _pageFor(context, service, _OutletSlot(page), depth),
+                ],
+              ),
+            )
+          else
+            const SizedBox.shrink(),
+      ],
+    );
+  }
+
+  void _registerNavigator(
+    RouterService service,
+    GlobalKey<NavigatorState> key,
+    int? ownerActivationId,
+  ) {
+    service.registerOutlet(this, key, ownerActivationId);
+  }
+
   /// An outlet with nothing in it means the route table has a hole: the
   /// shell matched but none of its children did. Blank screens are a bad way
   /// to learn that, so say it in debug, and name the route to fix.
@@ -126,26 +200,23 @@ class _RoutingViewState extends State<RoutingView> {
   /// Legitimately-empty outlets (an unselected detail pane) pass `empty` and
   /// never reach here.
   bool _reportEmptyOutlet(RouterService service, OutletScope outlet) {
-    final frameIndex = outlet.frameIndex;
-    final segmentIndex = outlet.segmentIndex;
-    if (frameIndex == null || segmentIndex == null || segmentIndex == 0) {
-      return true;
-    }
-    if (frameIndex >= service.frames.length) return true;
-
-    final frame = service.frames[frameIndex];
-    if (segmentIndex > frame.segments.length) return true;
-    final parent = frame.segments[segmentIndex - 1].last.match.route;
+    final ownerId = outlet.ownerActivationId;
+    if (outlet.isRoot || ownerId == null) return true;
+    final parent = service.activationForOutlet(ownerId)?.match.route;
+    if (parent == null) return true;
 
     throw FlutterError.fromParts([
-      ErrorSummary('No child route matched ${frame.uri} in this RoutingView.'),
+      ErrorSummary(
+        'No child route matched ${service.currentUri} in this RoutingView.',
+      ),
       ErrorDescription(
         '"${parent.debugPath}" declares childRouting: ChildRouting.outlet and '
         'matched, but none of its children matched the rest of the URL, so '
         'the outlet has nothing to render.',
       ),
       ErrorHint(
-        'Declare what "${frame.uri}" should show. Either an index child that '
+        'Declare what "${service.currentUri}" should show. Either an index '
+        'child that '
         'renders at the parent\'s own URL:\n'
         "  ModuleRoute(path: '', builder: (route) => TodosModule())\n"
         'or a redirect to a real child, which changes the URL too:\n'
@@ -155,36 +226,13 @@ class _RoutingViewState extends State<RoutingView> {
     ]);
   }
 
-  /// What this outlet renders: segment 0 of every frame at the root, one
-  /// segment of one frame when nested.
+  /// What this outlet renders, resolved from the runtime navigation tree.
   List<_OutletSlot> _slotsFor(RouterService service, OutletScope outlet) {
-    final frames = service.frames;
-    final slots = <_OutletSlot>[];
-
-    if (outlet.frameIndex == null) {
-      for (var index = 0; index < frames.length; index++) {
-        final frame = frames[index];
-        if (frame.isError) {
-          slots.add(_OutletSlot(index, frame, 0, null));
-          continue;
-        }
-        for (final activation in frame.segments.first) {
-          slots.add(_OutletSlot(index, frame, 0, activation));
-        }
-      }
-      return slots;
-    }
-
-    final frameIndex = outlet.frameIndex!;
-    final segmentIndex = outlet.segmentIndex;
-    if (segmentIndex == null || frameIndex >= frames.length) return slots;
-
-    final frame = frames[frameIndex];
-    if (segmentIndex >= frame.segments.length) return slots;
-    for (final activation in frame.segments[segmentIndex]) {
-      slots.add(_OutletSlot(frameIndex, frame, segmentIndex, activation));
-    }
-    return slots;
+    if (!outlet.isRoot && outlet.ownerActivationId == null) return const [];
+    return [
+      for (final page in service.pagesForOutlet(outlet.ownerActivationId))
+        _OutletSlot(page),
+    ];
   }
 
   Page<Object?> _pageFor(
@@ -236,11 +284,9 @@ class _RoutingViewState extends State<RoutingView> {
     return ActivatedRouteScope(
       route: activation.route,
       child: OutletScope(
-        frameIndex: slot.frameIndex,
-        // Only a route that opens an outlet has children to hand down; for
-        // anyone else this publishes "no slot here", so a misplaced
-        // RoutingView renders empty instead of looping on its ancestors.
-        segmentIndex: activation.opensOutlet ? slot.segmentIndex + 1 : null,
+        ownerActivationId: activation.opensNavigationBoundary
+            ? activation.id
+            : null,
         depth: depth + 1,
         child: child,
       ),
@@ -249,17 +295,12 @@ class _RoutingViewState extends State<RoutingView> {
 }
 
 class _OutletSlot {
-  const _OutletSlot(
-    this.frameIndex,
-    this.frame,
-    this.segmentIndex,
-    this.activation,
-  );
+  const _OutletSlot(this.page);
 
-  final int frameIndex;
-  final RouteFrame frame;
-  final int segmentIndex;
+  final NavigationPage page;
 
-  /// `null` for the error page of a frame that matched nothing.
-  final RouteActivation? activation;
+  RouteFrame get frame => page.frame;
+
+  /// `null` for an error page whose frame matched nothing.
+  RouteActivation? get activation => page.activation;
 }

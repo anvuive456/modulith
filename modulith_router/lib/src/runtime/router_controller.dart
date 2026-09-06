@@ -29,6 +29,9 @@ class RouterController extends Controller {
   /// tab index.
   late final activeRouteName = createSignal<String?>(null);
 
+  /// The active persistent branch, or `null` outside a branch outlet.
+  late final activeBranchName = createSignal<String?>(null);
+
   /// The router itself, for navigating from a controller that already has
   /// this one injected.
   RouterService get router => _service;
@@ -46,5 +49,6 @@ class RouterController extends Controller {
     canPop.value = _service.canPop;
     isNavigating.value = _service.isNavigating;
     activeRouteName.value = _service.activeRouteName;
+    activeBranchName.value = _service.activeBranchName;
   }
 }

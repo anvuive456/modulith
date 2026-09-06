@@ -19,6 +19,7 @@ export 'src/flutter/router_delegate.dart';
 export 'src/flutter/router_module.dart';
 export 'src/flutter/router_scope.dart';
 export 'src/flutter/routing_view.dart';
+export 'src/flutter/no_transition_page.dart';
 export 'src/model/route_definition.dart';
 export 'src/model/route_error.dart';
 export 'src/model/route_match.dart';

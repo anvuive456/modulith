@@ -1,11 +1,9 @@
 name: modulith
 description: "A lightweight module system for Flutter: scoped controllers/services and reactive signals, composed as a tree of modules."
-version: 0.0.1
+version: 0.1.0
 
-# Set these before publishing; `dart pub publish` rejects a package with
-# neither.
-# homepage: https://example.com/modulith
-# repository: https://github.com/you/modulith
+repository: https://github.com/anvuive456/modulith
+issue_tracker: https://github.com/anvuive456/modulith/issues
 
 environment:
   sdk: ^3.12.2

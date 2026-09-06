@@ -43,36 +43,29 @@ class RouterScope extends InheritedWidget {
       revision != oldWidget.revision || !identical(service, oldWidget.service);
 }
 
-/// Tells a [RoutingView] which slice of the stack it renders.
-///
-/// The root outlet renders segment 0 of every frame. Each route that opens
-/// an outlet publishes the next segment index for the `RoutingView` inside
-/// its own view; every other route publishes `null`, so a stray
-/// `RoutingView` fails with a clear message instead of rendering its own
-/// ancestors again.
+/// Identifies the navigation-tree node rendered by a [RoutingView].
 class OutletScope extends InheritedWidget {
-  /// Scopes [child] to one segment of one frame.
+  /// Scopes [child] to the outlet owned by [ownerActivationId].
   const OutletScope({
     super.key,
-    required this.frameIndex,
-    required this.segmentIndex,
+    required this.ownerActivationId,
     required this.depth,
     required super.child,
-  });
+  }) : isRoot = false;
 
   /// The scope the root `Router` publishes.
   const OutletScope.root({super.key, required super.child})
-    : frameIndex = null,
-      segmentIndex = 0,
+    : ownerActivationId = null,
+      isRoot = true,
       depth = 0;
 
-  /// Which frame this outlet belongs to, or `null` for the root outlet,
-  /// which renders across every frame.
-  final int? frameIndex;
+  /// The activation that owns this outlet, or `null` for the root outlet.
+  /// Navigation-tree nodes use this stable id instead of frame positions.
+  final int? ownerActivationId;
 
-  /// Which segment of that frame to render, or `null` when the enclosing
-  /// route has no outlet slot.
-  final int? segmentIndex;
+  /// Distinguishes the root navigator from a `RoutingView` placed below a
+  /// route that does not declare an outlet.
+  final bool isRoot;
 
   /// How deeply nested this outlet is; back navigation asks the deepest
   /// outlet first.
@@ -84,8 +77,8 @@ class OutletScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(OutletScope oldWidget) =>
-      frameIndex != oldWidget.frameIndex ||
-      segmentIndex != oldWidget.segmentIndex ||
+      ownerActivationId != oldWidget.ownerActivationId ||
+      isRoot != oldWidget.isRoot ||
       depth != oldWidget.depth;
 }
 

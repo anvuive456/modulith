@@ -15,6 +15,7 @@ import '../model/router_state.dart';
 import 'activated_route.dart';
 import 'activation.dart';
 import 'guards.dart';
+import 'navigation_tree.dart';
 import 'navigation_result.dart';
 
 enum _NavigationKind { go, push, replace }
@@ -62,7 +63,7 @@ class RouterService extends Service {
   final int _redirectLimit;
 
   final _RouterChanges _changes = _RouterChanges();
-  final List<RouteFrame> _frames = [];
+  final NavigationTree _navigation = NavigationTree();
   final List<_OutletRegistration> _outlets = [];
   final List<DeactivationGuard> _deactivationGuards = [];
 
@@ -78,6 +79,8 @@ class RouterService extends Service {
   int _nextFrameId = 0;
   bool _isNavigating = false;
   Object? _pendingPopResult;
+
+  List<RouteFrame> get _frames => _navigation.frames;
 
   @override
   void init() {
@@ -99,7 +102,15 @@ class RouterService extends Service {
 
     addDisposeCallback(() {
       for (final frame in _frames) {
-        frame.completer?.complete(null);
+        final completer = frame.completer;
+        if (completer != null && !completer.isCompleted) {
+          completer.complete(null);
+        }
+      }
+      for (final state in _navigation.branchStates.values) {
+        for (final history in state.histories.values) {
+          _abandonFrames(history);
+        }
       }
       _frames.clear();
       _delegate.dispose();
@@ -116,6 +127,21 @@ class RouterService extends Service {
 
   /// The live stack, oldest frame first. Read-only.
   List<RouteFrame> get frames => _frames;
+
+  /// Pages owned by one concrete navigator in the runtime navigation tree.
+  @internal
+  List<NavigationPage> pagesForOutlet(int? ownerActivationId) =>
+      _navigation.pagesFor(ownerActivationId);
+
+  /// Resolves the activation that owns a nested outlet.
+  @internal
+  RouteActivation? activationForOutlet(int ownerActivationId) =>
+      _navigation.activation(ownerActivationId);
+
+  /// Persistent branches rendered by an outlet activation.
+  @internal
+  NavigationBranchOutlet? branchesForOutlet(int ownerActivationId) =>
+      _navigation.branchesFor(ownerActivationId);
 
   /// Bumped on every change to [frames]; outlets rebuild on it.
   int get revision => _revision;
@@ -140,6 +166,13 @@ class RouterService extends Service {
   String? get activeRouteName =>
       _frames.isEmpty ? null : _frames.last.leaf?.match.definition.name;
 
+  /// The active persistent branch, or `null` outside a branch outlet.
+  String? get activeBranchName {
+    if (_frames.isEmpty) return null;
+    final host = _branchHost(_frames.last.matches);
+    return host?.branch.name;
+  }
+
   /// Whether a navigation is waiting on a guard.
   bool get isNavigating => _isNavigating;
 
@@ -148,16 +181,7 @@ class RouterService extends Service {
   /// Computed from the router's own model rather than by asking a
   /// [NavigatorState], so it is already correct when listeners are notified,
   /// before any widget has rebuilt.
-  bool get canPop {
-    var rootPages = 0;
-    for (final frame in _frames) {
-      rootPages += frame.isError ? 1 : frame.segments.first.length;
-      for (var i = 1; i < frame.segments.length; i++) {
-        if (frame.segments[i].length > 1) return true;
-      }
-    }
-    return rootPages > 1;
-  }
+  bool get canPop => _navigation.canPop;
 
   /// Notified when the stack or [isNavigating] changes.
   Listenable get changes => _changes;
@@ -247,6 +271,81 @@ class RouterService extends Service {
   Future<NavigationResult> refresh() =>
       _navigate(uri: currentUri, kind: _NavigationKind.go);
 
+  /// Activates a persistent branch, restoring its last stack when available.
+  Future<NavigationResult> switchBranch(
+    String name, {
+    bool reset = false,
+  }) async {
+    if (_frames.isEmpty) {
+      throw StateError('Cannot switch branches before initial navigation.');
+    }
+    final current = _branchHost(_frames.last.matches);
+    if (current == null) {
+      throw StateError('The active route is not inside a branch outlet.');
+    }
+    RouteBranch? branch;
+    for (final candidate in current.route.branches) {
+      if (candidate.name == name) {
+        branch = candidate;
+        break;
+      }
+    }
+    if (branch == null) {
+      throw ArgumentError.value(name, 'name', 'Unknown navigation branch.');
+    }
+
+    final owner = _frames.last.activations[current.index];
+    final state = _navigation.branchStates[owner.id];
+    if (state == null) {
+      throw StateError('The active branch outlet has not been initialized.');
+    }
+    if (!reset && state.activeBranch == name) {
+      return NavigationResult(NavigationOutcome.completed, currentUri);
+    }
+    if (!await _runDeactivationGuards()) {
+      return NavigationResult(NavigationOutcome.blocked, currentUri);
+    }
+
+    state.histories[state.activeBranch] = List.of(_frames);
+    final cached = reset ? null : state.histories[name];
+    final initialTarget = _normalize(Uri.parse(branch.initialLocation));
+    final resolved = cached == null
+        ? _matchFollowingRedirects(initialTarget)
+        : null;
+    if (cached == null && resolved == null) {
+      return NavigationResult(NavigationOutcome.blocked, initialTarget);
+    }
+    if (cached == null) {
+      _requireBranchMatches(current.route, branch, resolved!.matches);
+    }
+    final targetMatches = cached?.last.matches ?? resolved!.matches;
+    final targetUri = cached?.last.uri ?? resolved!.uri;
+    final decision = await _runGuards(targetMatches, targetUri, null);
+    if (decision is BlockGuardResult) {
+      return NavigationResult(NavigationOutcome.blocked, targetUri);
+    }
+    if (decision case RedirectGuardResult(:final location)) {
+      return go(location);
+    }
+
+    final history =
+        cached ??
+        [_buildBranchInitialFrame(owner, resolved!.uri, resolved.matches)];
+    if (reset) _completeFrames(state.histories[name] ?? const []);
+    state
+      ..activeBranch = name
+      ..histories[name] = history;
+    _frames
+      ..clear()
+      ..addAll(history);
+    _restoreActiveRoutes();
+    // The restored stack can host branch outlets of its own, whose state was
+    // dropped while this branch was in the background.
+    _syncBranchStates();
+    _publish();
+    return NavigationResult(NavigationOutcome.completed, currentUri);
+  }
+
   /// Builds the URL of a named route.
   Uri uriFor(
     String name, {
@@ -288,11 +387,13 @@ class RouterService extends Service {
   /// Pops the deepest outlet with more than one page.
   @internal
   Future<bool> popRoute() async {
-    final outlets = [..._outlets]..sort((a, b) => b.depth.compareTo(a.depth));
-    for (final outlet in outlets) {
-      final navigator = outlet.navigatorKey.currentState;
-      if (navigator == null || !navigator.canPop()) continue;
-      return navigator.maybePop();
+    for (final owner in _navigation.activeNavigatorOwners) {
+      for (final outlet in _outlets) {
+        if (outlet.ownerActivationId != owner) continue;
+        final navigator = outlet.navigatorKey.currentState;
+        if (navigator == null || !navigator.canPop()) break;
+        return navigator.maybePop();
+      }
     }
     _pendingPopResult = null;
     return false;
@@ -303,11 +404,11 @@ class RouterService extends Service {
   void registerOutlet(
     Object token,
     GlobalKey<NavigatorState> navigatorKey,
-    int depth,
+    int? ownerActivationId,
   ) {
     _outlets
       ..removeWhere((outlet) => identical(outlet.token, token))
-      ..add(_OutletRegistration(token, navigatorKey, depth));
+      ..add(_OutletRegistration(token, navigatorKey, ownerActivationId));
   }
 
   /// Removes an outlet registered with [registerOutlet].
@@ -322,43 +423,46 @@ class RouterService extends Service {
   /// child route cannot be shown without its parent.
   @internal
   void handlePageRemoved(Page<Object?> page) {
-    for (var index = 0; index < _frames.length; index++) {
-      final frame = _frames[index];
+    final navigationPage = _navigation.pageForKey(page.key);
+    if (navigationPage == null) return;
+    final frame = navigationPage.frame;
+    final index = _frames.indexWhere((candidate) => candidate.id == frame.id);
+    if (index < 0) return;
 
-      if (frame.isError) {
-        if (page.key == ValueKey('modulith_router_error#${frame.id}')) {
-          _dropFrames(index);
-          return;
-        }
-        continue;
-      }
-
-      final position = frame.activations.indexWhere(
-        (activation) => activation.pageKey == page.key,
-      );
-      if (position < 0) continue;
-
-      if (position == 0) {
-        _dropFrames(index);
-        return;
-      }
-
-      final kept = frame.activations.sublist(0, position);
-      _completeFrames(_frames.sublist(index + 1));
-      _frames.removeRange(index, _frames.length);
-      _frames.add(
-        RouteFrame(
-          id: frame.id,
-          uri: Uri.parse(kept.last.match.matchedPath),
-          activations: kept,
-          extra: frame.extra,
-          completer: frame.completer,
-        ),
-      );
-      _pendingPopResult = null;
-      _publish();
+    if (frame.isError) {
+      _dropFrames(index);
       return;
     }
+
+    final activation = navigationPage.activation!;
+    final position = frame.renderedActivations.toList().indexOf(activation);
+
+    if (position == 0) {
+      _dropFrames(index);
+      return;
+    }
+
+    final keptLength = frame.renderStart + position;
+    final kept = frame.activations.sublist(0, keptLength);
+    final keptMatches = frame.matches.sublist(0, keptLength);
+    _completeFrames(_frames.sublist(index + 1));
+    _frames.removeRange(index, _frames.length);
+    _frames.add(
+      RouteFrame(
+        id: frame.id,
+        uri: Uri.parse(kept.last.match.matchedPath),
+        matches: keptMatches,
+        activations: kept,
+        renderStart: frame.renderStart,
+        anchorActivationId: frame.anchorActivationId,
+        extra: frame.extra,
+        completer: frame.completer,
+      ),
+    );
+    _pendingPopResult = null;
+    _restoreActiveRoutes();
+    _syncBranchStates();
+    _publish();
   }
 
   /// The screen shown for a URL nothing matched.
@@ -530,40 +634,231 @@ class RouterService extends Service {
   ) {
     switch (kind) {
       case _NavigationKind.go:
+        final previousHost = _frames.isEmpty
+            ? null
+            : _branchHost(_frames.last.matches);
+        final nextHost = _branchHost(matches);
+        final changesBranch =
+            previousHost != null &&
+            nextHost != null &&
+            identical(previousHost.route, nextHost.route) &&
+            previousHost.branch.name != nextHost.branch.name;
         final base = _frames.isEmpty ? null : _frames.first;
         final frame = _buildFrame(
+          id: base?.id ?? _nextFrameId++,
           uri: uri,
           matches: matches,
           previous: base,
+          reuseCount: base == null ? 0 : _commonPrefixLength(base, matches),
           extra: extra,
         );
-        _completeFrames(_frames);
+        if (!changesBranch) _completeFrames(_frames);
         _frames
           ..clear()
           ..add(frame);
       case _NavigationKind.push:
-        _frames.add(
-          _buildFrame(
-            uri: uri,
-            matches: matches,
-            previous: null,
-            extra: extra,
-            completer: completer,
-          ),
-        );
+        _frames.add(_buildPushFrame(uri, matches, extra, completer));
       case _NavigationKind.replace:
+        // Reuse is measured against the frame being replaced, not against the
+        // one below it: the replacement takes that frame's place, so every
+        // shell it had opened above the frame below stays as it is instead of
+        // being torn down and built again.
         final base = _frames.isEmpty ? null : _frames.removeLast();
+        final reuseCount = base == null
+            ? 0
+            : _commonPrefixLength(base, matches);
+        // Rendering may not start deeper than the replaced frame did: the
+        // pages in between belong to no other frame.
+        final renderStart = base == null || reuseCount < base.renderStart
+            ? reuseCount
+            : base.renderStart;
         _frames.add(
           _buildFrame(
+            id: base?.id ?? _nextFrameId++,
             uri: uri,
             matches: matches,
             previous: base,
+            reuseCount: reuseCount,
+            renderStart: renderStart,
+            anchorActivationId: renderStart == 0
+                ? null
+                : _outletAnchor(base!, renderStart),
             extra: extra,
             completer: base?.completer,
           ),
         );
     }
+    _syncBranchStates();
     _publish();
+  }
+
+  void _syncBranchStates() {
+    if (_frames.isEmpty || _frames.last.isError) return;
+    for (var index = 0; index < _frames.last.activations.length; index++) {
+      final activation = _frames.last.activations[index];
+      final definition = activation.match.definition;
+      if (definition is! ModuleRoute || definition.branches.isEmpty) continue;
+      final branch = _branchAt(definition, _frames.last.matches, index);
+      if (branch == null) continue;
+      final state = _navigation.branchStates.putIfAbsent(
+        activation.id,
+        () => NavigationBranchState(
+          ownerActivationId: activation.id,
+          branchNames: [for (final item in definition.branches) item.name],
+          activeBranch: branch.name,
+        ),
+      );
+      state
+        ..activeBranch = branch.name
+        ..histories[branch.name] = List.of(_frames);
+
+      if (definition.branchInitialization == BranchInitialization.eager) {
+        for (final item in definition.branches) {
+          if (state.histories.containsKey(item.name)) continue;
+          final uri = _normalize(Uri.parse(item.initialLocation));
+          final resolved = _matchFollowingRedirects(uri);
+          if (resolved == null) {
+            throw StateError(
+              'Initial location ${item.initialLocation} of branch '
+              '"${item.name}" does not match a route.',
+            );
+          }
+          _requireBranchMatches(definition, item, resolved.matches);
+          state.histories[item.name] = [
+            _buildBranchInitialFrame(
+              activation,
+              resolved.uri,
+              resolved.matches,
+            ),
+          ];
+        }
+        _restoreActiveRoutes();
+      }
+    }
+  }
+
+  RouteFrame _buildBranchInitialFrame(
+    RouteActivation owner,
+    Uri uri,
+    List<RouteMatch> matches,
+  ) {
+    final previous = _frames.last;
+    final reuseCount = _commonPrefixLength(previous, matches);
+    if (reuseCount == 0 ||
+        previous.activations[reuseCount - 1].id != owner.id) {
+      throw StateError('$uri does not belong to the selected branch outlet.');
+    }
+    return _buildFrame(
+      id: _nextFrameId++,
+      uri: uri,
+      matches: matches,
+      previous: previous,
+      reuseCount: reuseCount,
+    );
+  }
+
+  ({Uri uri, List<RouteMatch> matches})? _matchFollowingRedirects(Uri uri) {
+    var target = uri;
+    for (var redirects = 0; redirects <= _redirectLimit; redirects++) {
+      final matches = _matcher.match(target);
+      if (matches == null) return null;
+      final redirect = _redirectTarget(matches, target);
+      if (redirect == null) return (uri: target, matches: matches);
+      target = _normalize(target.resolve(redirect));
+    }
+    throw StateError('Redirect loop while initializing branch at $uri.');
+  }
+
+  void _requireBranchMatches(
+    ModuleRoute host,
+    RouteBranch expected,
+    List<RouteMatch> matches,
+  ) {
+    final matched = _branchHost(matches);
+    if (matched == null ||
+        !identical(matched.route, host) ||
+        !identical(matched.branch, expected)) {
+      throw StateError(
+        'Initial location ${expected.initialLocation} does not belong to '
+        'branch "${expected.name}".',
+      );
+    }
+  }
+
+  ({int index, ModuleRoute route, RouteBranch branch})? _branchHost(
+    List<RouteMatch> matches,
+  ) {
+    for (var index = matches.length - 2; index >= 0; index--) {
+      final definition = matches[index].definition;
+      if (definition is! ModuleRoute || definition.branches.isEmpty) continue;
+      final branch = _branchAt(definition, matches, index);
+      if (branch != null) {
+        return (index: index, route: definition, branch: branch);
+      }
+    }
+    return null;
+  }
+
+  RouteBranch? _branchAt(
+    ModuleRoute host,
+    List<RouteMatch> matches,
+    int hostIndex,
+  ) {
+    if (hostIndex + 1 >= matches.length) return null;
+    final root = matches[hostIndex + 1].definition;
+    for (final branch in host.branches) {
+      if (branch.routes.any((route) => identical(route, root))) return branch;
+    }
+    return null;
+  }
+
+  RouteFrame _buildPushFrame(
+    Uri uri,
+    List<RouteMatch> matches,
+    Object? extra,
+    Completer<Object?>? completer,
+  ) {
+    final previous = _frames.isEmpty ? null : _frames.last;
+    var reuseCount = previous == null
+        ? 0
+        : _commonPrefixLength(previous, matches);
+
+    // Pushing the current location must still create a distinct top page.
+    if (matches.isNotEmpty && reuseCount == matches.length) reuseCount--;
+
+    return _buildFrame(
+      id: _nextFrameId++,
+      uri: uri,
+      matches: matches,
+      previous: previous,
+      reuseCount: reuseCount,
+      renderStart: reuseCount,
+      anchorActivationId: reuseCount == 0
+          ? null
+          : _outletAnchor(previous!, reuseCount),
+      extra: extra,
+      completer: completer,
+    );
+  }
+
+  int _commonPrefixLength(RouteFrame frame, List<RouteMatch> matches) {
+    final length = frame.activations.length < matches.length
+        ? frame.activations.length
+        : matches.length;
+    var index = 0;
+    while (index < length &&
+        _canReuse(frame.activations[index], matches[index])) {
+      index++;
+    }
+    return index;
+  }
+
+  int? _outletAnchor(RouteFrame frame, int beforeIndex) {
+    for (var index = beforeIndex - 1; index >= 0; index--) {
+      final activation = frame.activations[index];
+      if (activation.opensNavigationBoundary) return activation.id;
+    }
+    return null;
   }
 
   /// Builds the activations for one frame, reusing those of [previous] as
@@ -572,29 +867,25 @@ class RouterService extends Service {
   /// Reuse stops for good at the first activation that cannot be kept: what
   /// follows it depends on it, so it has to be rebuilt too.
   RouteFrame _buildFrame({
+    required int id,
     required Uri uri,
     required List<RouteMatch> matches,
     required RouteFrame? previous,
+    required int reuseCount,
+    int renderStart = 0,
+    int? anchorActivationId,
     Object? extra,
     Completer<Object?>? completer,
   }) {
     final activations = <RouteActivation>[];
-    var reusing = previous != null;
     ActivatedRoute? parent;
 
     for (var index = 0; index < matches.length; index++) {
       final match = matches[index];
       RouteActivation? reused;
 
-      if (reusing && index < previous!.activations.length) {
-        final candidate = previous.activations[index];
-        if (_canReuse(candidate, match)) {
-          reused = candidate;
-        } else {
-          reusing = false;
-        }
-      } else {
-        reusing = false;
+      if (previous != null && index < reuseCount) {
+        reused = previous.activations[index];
       }
 
       if (reused != null) {
@@ -623,9 +914,12 @@ class RouterService extends Service {
     }
 
     return RouteFrame(
-      id: previous?.id ?? _nextFrameId++,
+      id: id,
       uri: uri,
+      matches: List.unmodifiable(matches),
       activations: List.unmodifiable(activations),
+      renderStart: renderStart,
+      anchorActivationId: anchorActivationId,
       extra: extra,
       completer: completer,
     );
@@ -648,7 +942,21 @@ class RouterService extends Service {
     final removed = _frames.sublist(from);
     _frames.removeRange(from, _frames.length);
     _completeFrames(removed);
+    _restoreActiveRoutes();
+    _syncBranchStates();
     _publish();
+  }
+
+  void _restoreActiveRoutes() {
+    if (_frames.isEmpty) return;
+    final frame = _frames.last;
+    for (var index = 0; index < frame.activations.length; index++) {
+      frame.activations[index].update(
+        match: frame.matches[index],
+        uri: frame.uri,
+        extra: frame.extra,
+      );
+    }
   }
 
   /// Completes the futures of every popped frame. Only the topmost one gets
@@ -665,6 +973,18 @@ class RouterService extends Service {
     _pendingPopResult = null;
   }
 
+  /// Completes the futures of frames that are dropped without being popped —
+  /// a branch history whose outlet is gone, or the whole stack at dispose.
+  /// Nothing answered them, so none of them gets the value handed to [pop].
+  void _abandonFrames(List<RouteFrame> frames) {
+    for (final frame in frames) {
+      final completer = frame.completer;
+      if (completer == null || completer.isCompleted) continue;
+      if (_frames.contains(frame)) continue;
+      completer.complete(null);
+    }
+  }
+
   void _setNavigating(bool value) {
     if (_isNavigating == value) return;
     _isNavigating = value;
@@ -672,6 +992,13 @@ class RouterService extends Service {
   }
 
   void _publish() {
+    // A branch outlet the navigation just left for good takes its retained
+    // histories with it; nothing will ever pop those frames again.
+    for (final state in _navigation.rebuild()) {
+      for (final history in state.histories.values) {
+        _abandonFrames(history);
+      }
+    }
     _revision++;
     _delegate.notify();
     _notifyChanges();
@@ -718,9 +1045,9 @@ class _RouterChanges extends ChangeNotifier {
 }
 
 class _OutletRegistration {
-  _OutletRegistration(this.token, this.navigatorKey, this.depth);
+  _OutletRegistration(this.token, this.navigatorKey, this.ownerActivationId);
 
   final Object token;
   final GlobalKey<NavigatorState> navigatorKey;
-  final int depth;
+  final int? ownerActivationId;
 }

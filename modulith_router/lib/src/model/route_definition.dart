@@ -53,6 +53,41 @@ enum ChildRouting {
   /// view. This is what makes a route a shell/layout: a `Scaffold` with a
   /// bottom bar around an outlet, a master-detail split, a tab host.
   outlet,
+
+  /// Children are grouped into persistent navigation branches rendered by a
+  /// `RoutingView`. Each branch owns an independent [Navigator] stack.
+  branches,
+}
+
+/// When navigation branches create their initial route.
+enum BranchInitialization {
+  /// Create a branch when it first becomes active.
+  lazy,
+
+  /// Create every branch as soon as its host route is activated.
+  eager,
+}
+
+/// One persistent navigation branch hosted by a route using
+/// [ChildRouting.branches].
+@immutable
+class RouteBranch {
+  /// Declares a named branch and its initial location.
+  const RouteBranch({
+    required this.name,
+    required this.initialLocation,
+    required this.routes,
+  }) : assert(name != ''),
+       assert(routes.length > 0);
+
+  /// Stable identifier used by [RouterService.switchBranch].
+  final String name;
+
+  /// Location used the first time this branch is initialized.
+  final String initialLocation;
+
+  /// Routes owned by this branch.
+  final List<RouteDefinition> routes;
 }
 
 /// Whether an activation survives a navigation that lands on the same route
@@ -119,7 +154,20 @@ final class ModuleRoute extends RouteDefinition {
     this.childRouting = ChildRouting.stack,
     this.reuse = RouteReuse.byPathParams,
     this.pageBuilder,
-  });
+    this.branches = const [],
+    this.branchInitialization = BranchInitialization.lazy,
+  }) : assert(
+         branches.length == 0 || children.length == 0,
+         'A ModuleRoute cannot declare both children and branches.',
+       ),
+       assert(
+         branches.length == 0 || childRouting == ChildRouting.branches,
+         'A ModuleRoute with branches must use ChildRouting.branches.',
+       ),
+       assert(
+         childRouting != ChildRouting.branches || branches.length > 0,
+         'A ModuleRoute with ChildRouting.branches must declare branches.',
+       );
 
   /// Creates the module for one activation.
   final ModuleRouteBuilder builder;
@@ -132,6 +180,12 @@ final class ModuleRoute extends RouteDefinition {
 
   @override
   final RoutePageBuilder? pageBuilder;
+
+  /// Persistent navigation branches hosted by this route.
+  final List<RouteBranch> branches;
+
+  /// When [branches] create their initial routes.
+  final BranchInitialization branchInitialization;
 }
 
 /// A route that renders a plain widget in the scope of the route above it —
@@ -147,7 +201,10 @@ final class ViewRoute extends RouteDefinition {
     this.childRouting = ChildRouting.stack,
     this.reuse = RouteReuse.byPathParams,
     this.pageBuilder,
-  });
+  }) : assert(
+         childRouting != ChildRouting.branches,
+         'Only a ModuleRoute can host navigation branches.',
+       );
 
   /// Builds the widget for one activation.
   final ViewRouteBuilder builder;

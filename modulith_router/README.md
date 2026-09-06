@@ -1,9 +1,10 @@
 # modulith_router
 
-Navigation 2.0 routing for [modulith](../../). A route table of modules, each
-mounted with its own scope nested under the route above it, rendered through
-`RoutingView` outlets — Angular's `<router-outlet>`, except an outlet is a
-real `Navigator`, so children form a navigable stack.
+Navigation 2.0 routing for [modulith](https://pub.dev/packages/modulith). A
+route table of modules, each mounted with its own scope nested under the route
+above it, rendered through `RoutingView` outlets — Angular's
+`<router-outlet>`, except an outlet is a real `Navigator`, so children form a
+navigable stack.
 
 The router needs **no changes to modulith itself**: it is an ordinary module
 declaring an ordinary service.
@@ -94,6 +95,7 @@ Every route decides where its children go:
 | --- | --- | --- |
 | `ChildRouting.stack` (default) | as pages on the same `Navigator` | `/users` → `/users/42` pushes the detail over the list |
 | `ChildRouting.outlet` | inside the `RoutingView` in this route's own view | shells: a `Scaffold` with a bottom bar, master-detail, tab hosts |
+| `ChildRouting.branches` | in persistent branch `Navigator`s managed by one `RoutingView` | bottom navigation where each tab keeps its own stack |
 
 There is no separate `ShellRoute`: a route with `path: ''` and
 `childRouting: ChildRouting.outlet` *is* the shell.
@@ -128,6 +130,113 @@ An outlet whose parent matched but whose children did not is a hole in the
 route table, so in debug it throws with the route to fix rather than rendering
 a blank screen. Pass `empty:` when an empty outlet is what you meant.
 
+## Persistent navigation branches
+
+Use branches when each tab needs an independent navigation stack. Branch
+routes are routing metadata; the shell does not receive a child widget or a
+navigation shell from the router:
+
+```dart
+ModuleRoute(
+  path: '/',
+  builder: (route) => HomeModule(),
+  childRouting: ChildRouting.branches,
+  branches: [
+    RouteBranch(
+      name: 'todos',
+      initialLocation: '/todos',
+      routes: [
+        ModuleRoute(
+          path: '/todos',
+          name: 'todos',
+          builder: (route) => TodosModule(),
+          children: [
+            ModuleRoute(
+              path: ':id',
+              name: 'todo-detail',
+              builder: (route) => TodoDetailModule(
+                todoId: route.requireParam('id'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+    RouteBranch(
+      name: 'settings',
+      initialLocation: '/settings',
+      routes: [
+        ModuleRoute(
+          path: '/settings',
+          name: 'settings',
+          builder: (route) => SettingsModule(),
+        ),
+      ],
+    ),
+  ],
+)
+```
+
+The shell remains an ordinary module view. `RoutingView` builds and retains
+the branch navigators internally:
+
+```dart
+class HomeView extends ModularWidget {
+  const HomeView({super.key});
+
+  @override
+  Widget build(ModuleContext context) {
+    final router = context.getService<RouterService>();
+    final controller = context.getController<RouterController>();
+
+    return Scaffold(
+      body: const RoutingView(),
+      bottomNavigationBar: SignalBuilder(
+        signal: controller.activeBranchName,
+        builder: (branch) => BottomNavigationBar(
+          currentIndex: branch == 'settings' ? 1 : 0,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.list), label: 'Todos'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.settings),
+              label: 'Settings',
+            ),
+          ],
+          onTap: (index) => router.switchBranch(
+            index == 0 ? 'todos' : 'settings',
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
+`switchBranch(name)` restores that branch's last location and stack. For
+example, switching away from `/todos/42` and back to `todos` shows the same
+detail page. Only the active branch participates in `canPop`, system back and
+the swipe-back gesture. Use `switchBranch(name, reset: true)` to discard the
+saved stack and return to the branch's `initialLocation`.
+
+Branches initialize lazily by default. To mount every branch when the host
+route activates, opt into eager initialization:
+
+```dart
+ModuleRoute(
+  path: '/',
+  builder: (route) => HomeModule(),
+  childRouting: ChildRouting.branches,
+  branchInitialization: BranchInitialization.eager,
+  branches: [/* ... */],
+)
+```
+
+Eager initialization makes the first tab switch immediate, but it also runs
+module initialization and initial data loading for tabs the user has not
+opened. A branch's activation guards still run when that branch becomes
+active. A route cannot declare both `children` and `branches`, and every
+`initialLocation` must resolve to a route owned by its branch.
+
 ## Navigating
 
 `RouterService` is resolved like any other service: `context.router` from a
@@ -140,14 +249,15 @@ widget, `injectService<RouterService>()` from a controller.
 | `push<T>(location)` | stack a frame on top and await the value it is popped with |
 | `replace(location)` | swap the topmost frame |
 | `pop([result])` | pop the deepest outlet that has something to pop |
+| `switchBranch(name, reset: false)` | activate a persistent branch and restore or reset its stack |
 | `refresh()` | re-run matching and guards on the current URL (after a login) |
 | `uriFor(name, ...)` | build a URL without concatenating strings |
 
 Every navigation returns a `NavigationResult` — `completed`, `redirected`,
 `blocked` or `superseded` — so a caller can tell why nothing happened.
 
-Reactive state lives on `RouterController`: `uri`, `canPop`, `isNavigating`
-and `activeRouteName` as signals, for `SignalBuilder`.
+Reactive state lives on `RouterController`: `uri`, `canPop`, `isNavigating`,
+`activeRouteName` and `activeBranchName` as signals, for `SignalBuilder`.
 
 ## Guards
 
@@ -193,8 +303,6 @@ throw when the table is built rather than during some later navigation.
 ## Not implemented yet
 
 - Named outlets (`RoutingView(name: ...)` with parallel URL segments).
-- `keepAlive`: keeping an inactive tab's subtree mounted in an `IndexedStack`.
-  Switching branches today rebuilds the branch.
 - Resolvers (prefetching data before activation) — load in a controller and
   show a loading state instead.
 - Dialogs and sheets as routes; a custom `pageBuilder` can already return any

@@ -114,7 +114,21 @@ class RouteMatcher {
         _byName[name] = route;
       }
 
-      route.children = _compile(definition.children, route, {
+      final children =
+          definition is ModuleRoute && definition.branches.isNotEmpty
+          ? [for (final branch in definition.branches) ...branch.routes]
+          : definition.children;
+      if (definition is ModuleRoute && definition.branches.isNotEmpty) {
+        final names = <String>{};
+        for (final branch in definition.branches) {
+          if (!names.add(branch.name)) {
+            throw StateError(
+              'Route ${route.debugPath} declares branch "${branch.name}" more than once.',
+            );
+          }
+        }
+      }
+      route.children = _compile(children, route, {
         ...inheritedParams,
         ...pattern.parameterNames,
       });
@@ -123,12 +137,11 @@ class RouteMatcher {
 
     // Sort by specificity, keeping declaration order between equals —
     // List.sort is not stable, so the index is part of the comparison.
-    final indexed = [
-      for (var i = 0; i < compiled.length; i++) (i, compiled[i]),
-    ]..sort((a, b) {
-      final bySpecificity = a.$2.pattern.compareTo(b.$2.pattern);
-      return bySpecificity != 0 ? bySpecificity : a.$1 - b.$1;
-    });
+    final indexed = [for (var i = 0; i < compiled.length; i++) (i, compiled[i])]
+      ..sort((a, b) {
+        final bySpecificity = a.$2.pattern.compareTo(b.$2.pattern);
+        return bySpecificity != 0 ? bySpecificity : a.$1 - b.$1;
+      });
     return List.unmodifiable([for (final entry in indexed) entry.$2]);
   }
 

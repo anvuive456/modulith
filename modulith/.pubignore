@@ -1,0 +1,20 @@
+# A .pubignore replaces .gitignore for publishing, so everything that must
+# stay out of the archive has to be listed here, not just the extras.
+.dart_tool/
+.fvm/
+.idea/
+build/
+coverage/
+pubspec.lock
+*.iml
+.DS_Store
+
+# The example is here to be read on pub.dev, not built for six platforms.
+example/android/
+example/ios/
+example/linux/
+example/macos/
+example/windows/
+example/web/
+example/test_driver/
+example/integration_test/

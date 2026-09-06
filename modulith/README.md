@@ -282,7 +282,8 @@ nested modules via `ChildModuleView`, and controller-owned
 
 ## Routing
 
-Routing lives in a separate package, [`modulith_router`](packages/modulith_router),
+Routing lives in a separate package,
+[`modulith_router`](https://pub.dev/packages/modulith_router),
 so an app that doesn't need it doesn't pay for it. It builds on Navigation 2.0
 and needs no changes to this package: a route mounts a `Module` whose scope
 nests under the route above it, and `RoutingView` is the outlet those children

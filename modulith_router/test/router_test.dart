@@ -30,9 +30,7 @@ class ScreenModule extends Module {
 
   @override
   List<Provider<Controller>> get controllers => [
-    Provider<ScreenController>.singleton(
-      create: () => ScreenController(label),
-    ),
+    Provider<ScreenController>.singleton(create: () => ScreenController(label)),
   ];
 
   @override
@@ -76,9 +74,7 @@ class EmptyOutletShellView extends ModularWidget {
 
   @override
   Widget build(ModuleContext context) => Scaffold(
-    body: RoutingView(
-      empty: (context) => const Text('nothing selected'),
-    ),
+    body: RoutingView(empty: (context) => const Text('nothing selected')),
   );
 }
 
@@ -140,21 +136,27 @@ ModuleRoute screen(
   String label, {
   String? name,
   List<RouteDefinition> children = const [],
+  List<RouteBranch> branches = const [],
+  BranchInitialization branchInitialization = BranchInitialization.lazy,
   ChildRouting childRouting = ChildRouting.stack,
   RouteReuse reuse = RouteReuse.byPathParams,
   List<RouteGuard> guards = const [],
+  Page<Object?> Function(BuildContext, ActivatedRoute, Widget)? pageBuilder,
 }) => ModuleRoute(
   path: path,
   name: name,
   guards: guards,
   children: children,
+  branches: branches,
+  branchInitialization: branchInitialization,
   childRouting: childRouting,
   reuse: reuse,
+  pageBuilder: pageBuilder,
   builder: (route) {
     final id = route.param('id');
     return ScreenModule(
       id == null ? label : '$label:$id',
-      outlet: childRouting == ChildRouting.outlet,
+      outlet: childRouting != ChildRouting.stack,
     );
   },
 );
@@ -222,13 +224,9 @@ void main() {
     testWidgets('nests child routes as pages on the same navigator', (
       tester,
     ) async {
-      final router = await pumpRouter(
-        tester,
-        [
-          screen('users', 'users', children: [screen(':id', 'user')]),
-        ],
-        initialLocation: '/users',
-      );
+      final router = await pumpRouter(tester, [
+        screen('users', 'users', children: [screen(':id', 'user')]),
+      ], initialLocation: '/users');
 
       expect(find.text('screen:users'), findsOneWidget);
       expect(find.text('screen:user:42'), findsNothing);
@@ -266,6 +264,49 @@ void main() {
         'init:settings',
         'dispose:home',
       ]);
+    });
+
+    testWidgets('updates an outlet when sibling routes use NoTransitionPage', (
+      tester,
+    ) async {
+      NoTransitionPage noTransitionPage(
+        BuildContext context,
+        ActivatedRoute route,
+        Widget child,
+      ) => NoTransitionPage(child: child);
+
+      final router = await pumpRouter(tester, [
+        screen(
+          '/',
+          'shell',
+          childRouting: ChildRouting.outlet,
+          children: [
+            const RedirectRoute(path: '/', to: '/todos'),
+            screen(
+              '/todos',
+              'todos',
+              name: 'todos',
+              pageBuilder: noTransitionPage,
+            ),
+            screen(
+              '/settings',
+              'settings',
+              name: 'settings',
+              pageBuilder: noTransitionPage,
+            ),
+          ],
+        ),
+      ]);
+
+      expect(find.text('screen:todos'), findsOneWidget);
+
+      await router.go('/settings');
+      await tester.pumpAndSettle();
+
+      expect(router.currentUri, Uri.parse('/settings'));
+      expect(router.activeRouteName, 'settings');
+      expect(find.text('screen:settings'), findsOneWidget);
+      expect(find.text('screen:todos'), findsNothing);
     });
   });
 
@@ -346,6 +387,196 @@ void main() {
     });
   });
 
+  group('navigation branches', () {
+    List<RouteDefinition> routes({
+      BranchInitialization initialization = BranchInitialization.lazy,
+    }) => [
+      screen(
+        '/',
+        'shell',
+        childRouting: ChildRouting.branches,
+        branchInitialization: initialization,
+        branches: [
+          RouteBranch(
+            name: 'todos',
+            initialLocation: '/todos',
+            routes: [
+              screen(
+                '/todos',
+                'todos',
+                name: 'todos',
+                children: [screen(':id', 'todo-detail', name: 'todo-detail')],
+              ),
+            ],
+          ),
+          RouteBranch(
+            name: 'settings',
+            initialLocation: '/settings',
+            routes: [screen('/settings', 'settings', name: 'settings')],
+          ),
+        ],
+      ),
+    ];
+
+    testWidgets('restores each branch stack without passing a shell widget', (
+      tester,
+    ) async {
+      final router = await pumpRouter(
+        tester,
+        routes(),
+        initialLocation: '/todos',
+      );
+
+      var pushCompleted = false;
+      unawaited(
+        router.push<void>('/todos/42').then((_) => pushCompleted = true),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('screen:todo-detail:42'), findsOneWidget);
+
+      await router.switchBranch('settings');
+      await tester.pumpAndSettle();
+      expect(router.activeBranchName, 'settings');
+      expect(router.currentUri, Uri.parse('/settings'));
+      expect(find.text('screen:settings'), findsOneWidget);
+      expect(find.text('screen:todo-detail:42'), findsNothing);
+      expect(router.canPop, isFalse);
+      expect(pushCompleted, isFalse);
+
+      await router.switchBranch('todos');
+      await tester.pumpAndSettle();
+      expect(router.activeBranchName, 'todos');
+      expect(router.currentUri, Uri.parse('/todos/42'));
+      expect(find.text('screen:todo-detail:42'), findsOneWidget);
+      expect(router.canPop, isTrue);
+      expect(lifecycle.where((event) => event == 'init:shell'), hasLength(1));
+      expect(lifecycle.where((event) => event == 'init:todos'), hasLength(1));
+
+      await router.pop();
+      await tester.pumpAndSettle();
+      expect(find.text('screen:todos'), findsOneWidget);
+      expect(find.text('screen:todo-detail:42'), findsNothing);
+      expect(pushCompleted, isTrue);
+    });
+
+    testWidgets('completes a push left pending when the outlet itself is '
+        'gone', (tester) async {
+      final router = await pumpRouter(tester, [
+        ...routes(),
+        screen('/login', 'login'),
+      ], initialLocation: '/todos');
+
+      var pushCompleted = false;
+      unawaited(
+        router.push<void>('/todos/42').then((_) => pushCompleted = true),
+      );
+      await tester.pumpAndSettle();
+
+      await router.switchBranch('settings');
+      await tester.pumpAndSettle();
+      expect(pushCompleted, isFalse);
+
+      await router.go('/login');
+      await tester.pumpAndSettle();
+
+      expect(find.text('screen:login'), findsOneWidget);
+      expect(
+        pushCompleted,
+        isTrue,
+        reason:
+            'Leaving the host drops the stacks it retained, so nothing '
+            'can ever pop that frame and answer the push.',
+      );
+    });
+
+    testWidgets('keeps a nested branch outlet while the branch above it is '
+        'in the background', (tester) async {
+      final router = await pumpRouter(tester, [
+        screen(
+          '/',
+          'shell',
+          childRouting: ChildRouting.branches,
+          branches: [
+            RouteBranch(
+              name: 'todos',
+              initialLocation: '/todos/open',
+              routes: [
+                screen(
+                  '/todos',
+                  'todos',
+                  childRouting: ChildRouting.branches,
+                  branches: [
+                    RouteBranch(
+                      name: 'open',
+                      initialLocation: '/todos/open',
+                      routes: [screen('open', 'open')],
+                    ),
+                    RouteBranch(
+                      name: 'done',
+                      initialLocation: '/todos/done',
+                      routes: [screen('done', 'done')],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            RouteBranch(
+              name: 'settings',
+              initialLocation: '/settings',
+              routes: [screen('/settings', 'settings')],
+            ),
+          ],
+        ),
+      ], initialLocation: '/todos/open');
+
+      // switchBranch addresses the innermost outlet of the active route.
+      await router.switchBranch('done');
+      await tester.pumpAndSettle();
+      expect(router.currentUri, Uri.parse('/todos/done'));
+
+      await router.go('/settings');
+      await tester.pumpAndSettle();
+      expect(
+        tester.takeException(),
+        isNull,
+        reason:
+            'The nested outlet must not be rebuilt into a plain '
+            'navigator when its branch goes to the background.',
+      );
+      expect(find.text('screen:settings'), findsOneWidget);
+
+      await router.switchBranch('todos');
+      await tester.pumpAndSettle();
+      expect(router.currentUri, Uri.parse('/todos/done'));
+
+      await router.switchBranch('open');
+      await tester.pumpAndSettle();
+      expect(router.currentUri, Uri.parse('/todos/open'));
+      expect(find.text('screen:open'), findsOneWidget);
+      expect(
+        lifecycle.where((event) => event == 'init:open'),
+        hasLength(1),
+        reason: 'The nested branch kept its own stack across the round trip.',
+      );
+    });
+
+    testWidgets('eagerly initializes every branch', (tester) async {
+      final router = await pumpRouter(
+        tester,
+        routes(initialization: BranchInitialization.eager),
+        initialLocation: '/todos',
+      );
+
+      expect(router.activeBranchName, 'todos');
+      expect(
+        lifecycle,
+        containsAll(['init:shell', 'init:todos', 'init:settings']),
+      );
+      expect(find.text('screen:todos'), findsOneWidget);
+      expect(find.text('screen:settings'), findsNothing);
+    });
+  });
+
   group('lifecycle', () {
     testWidgets('disposes the module of a route it navigates away from', (
       tester,
@@ -364,11 +595,9 @@ void main() {
     testWidgets('rebuilds the module when path parameters change', (
       tester,
     ) async {
-      final router = await pumpRouter(
-        tester,
-        [screen('users/:id', 'user')],
-        initialLocation: '/users/1',
-      );
+      final router = await pumpRouter(tester, [
+        screen('users/:id', 'user'),
+      ], initialLocation: '/users/1');
 
       await router.go('/users/2');
       await tester.pumpAndSettle();
@@ -380,11 +609,9 @@ void main() {
     testWidgets('keeps the module and updates params with RouteReuse.always', (
       tester,
     ) async {
-      final router = await pumpRouter(
-        tester,
-        [screen('users/:id', 'user', reuse: RouteReuse.always)],
-        initialLocation: '/users/1',
-      );
+      final router = await pumpRouter(tester, [
+        screen('users/:id', 'user', reuse: RouteReuse.always),
+      ], initialLocation: '/users/1');
 
       await router.go('/users/2');
       await tester.pumpAndSettle();
@@ -400,13 +627,9 @@ void main() {
     testWidgets('pop goes back to the page below and updates the URL', (
       tester,
     ) async {
-      final router = await pumpRouter(
-        tester,
-        [
-          screen('users', 'users', children: [screen(':id', 'user')]),
-        ],
-        initialLocation: '/users/42',
-      );
+      final router = await pumpRouter(tester, [
+        screen('users', 'users', children: [screen(':id', 'user')]),
+      ], initialLocation: '/users/42');
 
       expect(find.text('screen:user:42'), findsOneWidget);
 
@@ -441,21 +664,99 @@ void main() {
       expect(lifecycle, ['init:home', 'init:picker', 'dispose:picker']);
     });
 
-    testWidgets('pops the deepest outlet first', (tester) async {
-      final router = await pumpRouter(
-        tester,
-        [
+    testWidgets(
+      'pushing a descendant of an outlet does not duplicate its shell',
+      (tester) async {
+        final router = await pumpRouter(tester, [
           screen(
-            '',
+            '/',
             'shell',
             childRouting: ChildRouting.outlet,
             children: [
-              screen('users', 'users', children: [screen(':id', 'user')]),
+              const RedirectRoute(path: '/', to: '/todos'),
+              screen(
+                '/todos',
+                'todos',
+                name: 'todos',
+                children: [screen(':id', 'todo-detail', name: 'todo-detail')],
+              ),
             ],
           ),
-        ],
-        initialLocation: '/users/42',
+        ]);
+
+        unawaited(
+          router.pushNamed<void>('todo-detail', pathParams: const {'id': '42'}),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('screen:todo-detail:42'), findsOneWidget);
+        expect(
+          lifecycle.where((event) => event == 'init:shell'),
+          hasLength(1),
+          reason: 'A descendant push must stay inside the existing shell.',
+        );
+        final navigators = tester
+            .stateList<NavigatorState>(find.byType(Navigator))
+            .toList();
+        expect(navigators, hasLength(2));
+        expect(
+          navigators.where((navigator) => navigator.canPop()),
+          hasLength(1),
+          reason: 'Only the shell outlet may pop the pushed detail.',
+        );
+      },
+    );
+
+    testWidgets('one pop completes a descendant push inside an outlet', (
+      tester,
+    ) async {
+      final router = await pumpRouter(tester, [
+        screen(
+          '/',
+          'shell',
+          childRouting: ChildRouting.outlet,
+          children: [
+            const RedirectRoute(path: '/', to: '/todos'),
+            screen('/todos', 'todos', children: [screen(':id', 'todo-detail')]),
+          ],
+        ),
+      ]);
+      var completed = false;
+      String? result;
+      final pushed = router.push<String>('/todos/42');
+      unawaited(
+        pushed.then((value) {
+          completed = true;
+          result = value;
+        }),
       );
+      await tester.pumpAndSettle();
+
+      await router.pop('saved');
+      await tester.pumpAndSettle();
+
+      expect(find.text('screen:todo-detail:42'), findsNothing);
+      expect(router.currentUri, Uri.parse('/todos'));
+      expect(
+        completed,
+        isTrue,
+        reason: 'Popping the pushed detail must complete the push Future.',
+      );
+      expect(result, 'saved');
+      expect(router.canPop, isFalse);
+    });
+
+    testWidgets('pops the deepest outlet first', (tester) async {
+      final router = await pumpRouter(tester, [
+        screen(
+          '',
+          'shell',
+          childRouting: ChildRouting.outlet,
+          children: [
+            screen('users', 'users', children: [screen(':id', 'user')]),
+          ],
+        ),
+      ], initialLocation: '/users/42');
 
       expect(find.text('screen:shell'), findsOneWidget);
       expect(find.text('screen:user:42'), findsOneWidget);
@@ -466,6 +767,53 @@ void main() {
       expect(find.text('screen:user:42'), findsNothing);
       expect(find.text('screen:shell'), findsOneWidget);
       expect(router.currentUri, Uri.parse('/users'));
+    });
+  });
+
+  group('replacing', () {
+    testWidgets('replaces the top frame without rebuilding the shell it was '
+        'pushed into', (tester) async {
+      final router = await pumpRouter(tester, [
+        screen(
+          '/',
+          'shell',
+          childRouting: ChildRouting.outlet,
+          children: [
+            const RedirectRoute(path: '/', to: '/todos'),
+            screen(
+              '/todos',
+              'todos',
+              children: [
+                screen(
+                  ':id',
+                  'detail',
+                  childRouting: ChildRouting.outlet,
+                  children: [
+                    screen('edit', 'edit'),
+                    screen('preview', 'preview'),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ]);
+
+      unawaited(router.push<void>('/todos/42/edit'));
+      await tester.pumpAndSettle();
+      expect(find.text('screen:edit:42'), findsOneWidget);
+
+      await router.replace('/todos/42/preview');
+      await tester.pumpAndSettle();
+
+      expect(router.currentUri, Uri.parse('/todos/42/preview'));
+      expect(find.text('screen:preview:42'), findsOneWidget);
+      expect(find.text('screen:edit:42'), findsNothing);
+      expect(
+        lifecycle.where((event) => event == 'init:detail:42'),
+        hasLength(1),
+        reason: 'Only the replaced page changes; the shell around it stays.',
+      );
     });
   });
 
