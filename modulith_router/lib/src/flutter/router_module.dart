@@ -6,6 +6,7 @@ import '../model/route_error.dart';
 import '../model/router_state.dart';
 import '../runtime/guards.dart';
 import '../runtime/router_controller.dart';
+import '../runtime/router_observer.dart';
 import '../runtime/router_service.dart';
 
 /// Builds the app around the router's [RouterConfig] — normally
@@ -50,6 +51,7 @@ class RouterModule extends Module {
     required this.appBuilder,
     this.initialLocation = '/',
     this.guards = const [],
+    this.observers = const [],
     this.errorBuilder,
     this.routeInformationProvider,
     this.backButtonDispatcher,
@@ -68,6 +70,10 @@ class RouterModule extends Module {
 
   /// Guards that run before every navigation, ahead of any route's own.
   final List<RouteGuard> guards;
+
+  /// Told what the navigation pipeline decides — analytics, logging, or a
+  /// debugging tool. See [RouterObserver].
+  final List<RouterObserver> observers;
 
   /// What to show for a URL nothing matches. A `**` route takes precedence.
   final RouteErrorBuilder? errorBuilder;
@@ -89,6 +95,7 @@ class RouterModule extends Module {
         routes: routes,
         initialLocation: initialLocation,
         guards: guards,
+        observers: observers,
         errorBuilder: errorBuilder,
         routeInformationProvider: routeInformationProvider,
         backButtonDispatcher: backButtonDispatcher,

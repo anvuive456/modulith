@@ -1,6 +1,6 @@
 name: modulith_router
 description: "Navigation 2.0 routing for modulith: nested route modules mounted through RoutingView outlets, with guards, deep links and scoped DI."
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/anvuive456/modulith
 issue_tracker: https://github.com/anvuive456/modulith/issues
 

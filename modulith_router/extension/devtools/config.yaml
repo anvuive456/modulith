@@ -1,0 +1,5 @@
+name: modulith_router
+issueTracker: https://github.com/anvuive456/modulith/issues
+version: 0.1.0
+materialIconCodePoint: '0xf0561'
+requiresConnection: true
