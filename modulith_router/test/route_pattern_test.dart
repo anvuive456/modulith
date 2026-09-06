@@ -29,7 +29,10 @@ void main() {
     });
 
     test('rejects an empty parameter name', () {
-      expect(() => RoutePattern.parse('users/:'), throwsA(isA<ArgumentError>()));
+      expect(
+        () => RoutePattern.parse('users/:'),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 

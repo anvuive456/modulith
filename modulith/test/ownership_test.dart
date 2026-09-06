@@ -369,28 +369,32 @@ void main() {
       expect(TrackedController.disposed, 21);
     });
 
-    test('an injected factory instance dies with the requesting controller',
-        () {
-      final context = ModuleScope(
-        module: TestModule(
-          view: const SizedBox.shrink(),
-          controllers: [
-            Provider<HostController>.factory(create: HostController.new),
-            Provider<TrackedController>.factory(create: TrackedController.new),
-          ],
-        ),
-      )..initialize();
+    test(
+      'an injected factory instance dies with the requesting controller',
+      () {
+        final context = ModuleScope(
+          module: TestModule(
+            view: const SizedBox.shrink(),
+            controllers: [
+              Provider<HostController>.factory(create: HostController.new),
+              Provider<TrackedController>.factory(
+                create: TrackedController.new,
+              ),
+            ],
+          ),
+        )..initialize();
 
-      final host = context.getController<HostController>();
-      expect(TrackedController.created, 1);
-      expect(TrackedController.disposed, 0);
+        final host = context.getController<HostController>();
+        expect(TrackedController.created, 1);
+        expect(TrackedController.disposed, 0);
 
-      expect(context.release(host), isTrue);
-      expect(TrackedController.disposed, 1);
+        expect(context.release(host), isTrue);
+        expect(TrackedController.disposed, 1);
 
-      context.dispose();
-      expect(TrackedController.disposed, 1);
-    });
+        context.dispose();
+        expect(TrackedController.disposed, 1);
+      },
+    );
 
     test('release disposes a factory instance early, singletons never', () {
       final context = ModuleScope(

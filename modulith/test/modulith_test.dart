@@ -227,10 +227,7 @@ void main() {
 
     await tester.pumpWidget(ModuleWidget(module: parent));
 
-    expect(
-      probe.getController<CounterController>(),
-      same(parentController),
-    );
+    expect(probe.getController<CounterController>(), same(parentController));
   });
 
   testWidgets('ModularWidget resolves controllers through its context', (
@@ -255,7 +252,9 @@ void main() {
     // The module and its context stay put: the only thing that changes is
     // the value the parent hands to the ModularWidget.
     await tester.pumpWidget(
-      ModuleWidget(module: TestModule(view: LabelHost(key: key))),
+      ModuleWidget(
+        module: TestModule(view: LabelHost(key: key)),
+      ),
     );
     expect(find.text('first'), findsOneWidget);
 
@@ -289,10 +288,7 @@ void main() {
       probe.getController<CounterController>(name: 'secondary'),
       same(secondary),
     );
-    expect(
-      () => probe.getController<CounterController>(),
-      throwsStateError,
-    );
+    expect(() => probe.getController<CounterController>(), throwsStateError);
   });
 
   testWidgets(

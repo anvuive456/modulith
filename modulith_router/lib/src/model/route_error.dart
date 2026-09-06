@@ -20,4 +20,5 @@ class RouteError {
 ///
 /// Declaring a `**` route is the other way to handle this, and the better
 /// one when the "not found" screen is a normal part of the app.
-typedef RouteErrorBuilder = Widget Function(BuildContext context, RouteError error);
+typedef RouteErrorBuilder =
+    Widget Function(BuildContext context, RouteError error);

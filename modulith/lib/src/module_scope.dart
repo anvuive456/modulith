@@ -408,9 +408,7 @@ final class ModuleScope {
 
   void _ensureActive() {
     if (!_isUsable) {
-      throw StateError(
-        'Module scope for ${module.runtimeType} is not active',
-      );
+      throw StateError('Module scope for ${module.runtimeType} is not active');
     }
   }
 

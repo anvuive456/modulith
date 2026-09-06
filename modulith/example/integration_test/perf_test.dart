@@ -21,21 +21,22 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('tapping Counter.increment repeatedly stays within frame budget', (
-    tester,
-  ) async {
-    await tester.pumpWidget(ModuleWidget(module: AppModule()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Counter'));
-    await tester.pumpAndSettle();
-
-    await binding.traceAction(() async {
-      for (var i = 0; i < 20; i++) {
-        await tester.tap(find.byIcon(Icons.add));
-        await tester.pump();
-      }
+  testWidgets(
+    'tapping Counter.increment repeatedly stays within frame budget',
+    (tester) async {
+      await tester.pumpWidget(ModuleWidget(module: AppModule()));
       await tester.pumpAndSettle();
-    }, reportKey: 'counter_timeline');
-  });
+
+      await tester.tap(find.text('Counter'));
+      await tester.pumpAndSettle();
+
+      await binding.traceAction(() async {
+        for (var i = 0; i < 20; i++) {
+          await tester.tap(find.byIcon(Icons.add));
+          await tester.pump();
+        }
+        await tester.pumpAndSettle();
+      }, reportKey: 'counter_timeline');
+    },
+  );
 }

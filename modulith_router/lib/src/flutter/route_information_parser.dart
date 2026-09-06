@@ -9,7 +9,8 @@ import '../model/router_state.dart';
 /// depends on the route table and guards are asynchronous and need
 /// dependencies — both belong in the delegate, which gets to be `async` and
 /// has a module scope to resolve from.
-class ModulithRouteInformationParser extends RouteInformationParser<RouterState> {
+class ModulithRouteInformationParser
+    extends RouteInformationParser<RouterState> {
   /// Creates a parser.
   const ModulithRouteInformationParser();
 

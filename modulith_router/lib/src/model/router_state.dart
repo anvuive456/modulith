@@ -16,8 +16,7 @@ class RouteEntry {
   final Object? extra;
 
   @override
-  bool operator ==(Object other) =>
-      other is RouteEntry && other.uri == uri;
+  bool operator ==(Object other) => other is RouteEntry && other.uri == uri;
 
   @override
   int get hashCode => uri.hashCode;

@@ -118,9 +118,7 @@ void main() {
       final root = ModuleScope(
         module: TestModule(
           view: const SizedBox.shrink(),
-          services: [
-            Provider<DepService>.singleton(create: DepService.new),
-          ],
+          services: [Provider<DepService>.singleton(create: DepService.new)],
         ),
       )..initialize();
 
@@ -198,9 +196,7 @@ void main() {
       final context = ModuleScope(
         module: TestModule(
           view: const SizedBox.shrink(),
-          services: [
-            Provider<MainService>.singleton(create: MainService.new),
-          ],
+          services: [Provider<MainService>.singleton(create: MainService.new)],
         ),
       )..initialize();
 
