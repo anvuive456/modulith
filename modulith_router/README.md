@@ -9,16 +9,17 @@ navigable stack.
 The router needs **no changes to modulith itself**: it is an ordinary module
 declaring an ordinary service.
 
-An app that routes depends on this package only — it re-exports
-`package:modulith/modulith.dart`, so one import gives you `Module`,
-`Controller`, `Signal` and the routing API together:
+This package exports the routing API only, so an app that routes declares
+both packages and imports both:
 
 ```yaml
 dependencies:
+  modulith: ^0.1.0
   modulith_router: ^0.1.0
 ```
 
 ```dart
+import 'package:modulith/modulith.dart';
 import 'package:modulith_router/modulith_router.dart';
 ```
 

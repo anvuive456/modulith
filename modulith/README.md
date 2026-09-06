@@ -289,8 +289,8 @@ and needs no changes to this package: a route mounts a `Module` whose scope
 nests under the route above it, and `RoutingView` is the outlet those children
 render into.
 
-An app that routes depends on `modulith_router` **instead of** this package —
-it re-exports everything here, so one import covers both.
+An app that routes depends on `modulith_router` **as well as** this package,
+and imports both libraries.
 
 ```dart
 RouterModule(

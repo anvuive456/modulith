@@ -2,8 +2,8 @@
 
 First release.
 
-* Re-exports `package:modulith/modulith.dart`, so an app that routes depends
-  on this package alone and imports one library.
+* Exports the routing API only: an app that routes depends on `modulith`
+  as well and imports both libraries.
 * `RouterModule` — the router as a modulith module: `RouterService` (route
   table, navigation, `RouterConfig`) and `RouterController` (`uri`, `canPop`,
   `isNavigating`, `activeRouteName` as signals).

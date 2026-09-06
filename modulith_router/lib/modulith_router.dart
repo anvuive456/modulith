@@ -5,13 +5,12 @@
 /// The router is itself a module ([RouterModule]) and its API is an ordinary
 /// `Service` ([RouterService]) — there is no global navigator singleton.
 ///
-/// This library re-exports `package:modulith/modulith.dart`, so an app that
-/// routes depends on this package alone and imports one thing. The dependency
-/// only ever points this way: modulith knows nothing about routing, and an app
-/// that doesn't route never pulls this package in.
+/// An app that routes depends on this package *and* on
+/// `package:modulith/modulith.dart`, and imports both: this library exports
+/// the routing API only. The dependency only ever points this way — modulith
+/// knows nothing about routing, and an app that doesn't route never pulls
+/// this package in.
 library;
-
-export 'package:modulith/modulith.dart';
 
 export 'src/flutter/context_extensions.dart';
 export 'src/flutter/route_information_parser.dart';

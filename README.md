@@ -8,8 +8,8 @@ package is published on its own and lives in its own directory here.
 | [`modulith`](https://pub.dev/packages/modulith) | [`modulith/`](modulith) | Scoped controllers and services composed as a tree of modules, with reactive signals. |
 | [`modulith_router`](https://pub.dev/packages/modulith_router) | [`modulith_router/`](modulith_router) | Navigation 2.0 routing: nested route modules mounted through `RoutingView` outlets, with guards, deep links and scoped DI. |
 
-An app that routes depends on `modulith_router` alone: it re-exports
-`modulith`.
+`modulith_router` exports the routing API only, so an app that routes
+depends on both packages and imports both.
 
 ## Working in this repo
 
