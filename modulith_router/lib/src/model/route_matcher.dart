@@ -1,6 +1,54 @@
+import 'package:meta/meta.dart';
+
 import 'route_definition.dart';
 import 'route_match.dart';
 import 'route_pattern.dart';
+
+/// What became of one route the matcher tried.
+enum MatchOutcome {
+  /// The route's pattern did not fit the URL where it was tried.
+  patternMismatch,
+
+  /// The pattern fitted and the matcher moved past it. Whether it ended up
+  /// in the chain depends on what happened deeper: a route can consume its
+  /// segments and still be abandoned because nothing below it took the rest
+  /// of the URL.
+  consumed,
+}
+
+/// One route the matcher tried, recorded in the order it was tried.
+///
+/// Collected only when a trace is asked for, which is what lets a debugging
+/// tool answer "why does this URL not match?" with the routes that were
+/// considered instead of a bare `null`.
+@internal
+@immutable
+class MatchAttempt {
+  /// Records one attempt. Built by [RouteMatcher].
+  const MatchAttempt({
+    required this.route,
+    required this.depth,
+    required this.outcome,
+    required this.consumedUpTo,
+  });
+
+  /// The route that was tried.
+  final CompiledRoute route;
+
+  /// How deep in the tree it was tried: 0 for a top-level route.
+  final int depth;
+
+  /// What became of it.
+  final MatchOutcome outcome;
+
+  /// The URL segment the matcher stood at afterwards — where it failed for
+  /// [MatchOutcome.patternMismatch], and how far it got otherwise.
+  final int consumedUpTo;
+
+  @override
+  String toString() =>
+      'MatchAttempt(${route.debugPath}: ${outcome.name} at $consumedUpTo)';
+}
 
 /// Compiles a route table once, then matches URLs against it.
 ///
@@ -29,11 +77,15 @@ class RouteMatcher {
 
   /// Matches [uri] and returns the chain from the root route down to the
   /// leaf, or `null` when nothing matches.
-  List<RouteMatch>? match(Uri uri) {
+  ///
+  /// Pass [trace] to have every route the matcher tries appended to it, in
+  /// order. Costs nothing when it is `null`, which is every navigation the
+  /// app makes; the DevTools extension passes one to explain a match.
+  List<RouteMatch>? match(Uri uri, {List<MatchAttempt>? trace}) {
     final segments = uri.pathSegments
         .where((segment) => segment.isNotEmpty)
         .toList(growable: false);
-    return _matchIn(_roots, segments, 0, const {}, const []);
+    return _matchIn(_roots, segments, 0, const {}, const [], trace);
   }
 
   /// The route declared with [name], or `null`.
@@ -151,12 +203,31 @@ class RouteMatcher {
     int start,
     Map<String, String> params,
     List<RouteMatch> chain,
+    List<MatchAttempt>? trace,
   ) {
     for (final route in candidates) {
       final consumed = _consume(route.pattern, segments, start, params);
-      if (consumed == null) continue;
+      if (consumed == null) {
+        trace?.add(
+          MatchAttempt(
+            route: route,
+            depth: chain.length,
+            outcome: MatchOutcome.patternMismatch,
+            consumedUpTo: start,
+          ),
+        );
+        continue;
+      }
 
       final (end, nextParams) = consumed;
+      trace?.add(
+        MatchAttempt(
+          route: route,
+          depth: chain.length,
+          outcome: MatchOutcome.consumed,
+          consumedUpTo: end,
+        ),
+      );
       final extended = [
         ...chain,
         RouteMatch(
@@ -175,6 +246,7 @@ class RouteMatcher {
           end,
           nextParams,
           extended,
+          trace,
         );
         if (deeper != null) return deeper;
       }

@@ -1,3 +1,32 @@
+## 0.2.0
+
+* `RouterObserver` — a hook on `RouterModule` and `RouterService` that
+  reports what the navigation pipeline decides: `NavigationStarted`,
+  `RouteMatched`, `RedirectApplied`, `GuardEvaluated` (with the route it is
+  declared on and how long it took), `DeactivationBlocked`,
+  `NavigationEnded` and `StackChanged`, all tied together by a
+  `navigationId`. `LoggingRouterObserver` prints them.
+* A router with no observers builds no events, times no guards and allocates
+  nothing for the hook. An observer that throws is reported through
+  `FlutterError.reportError` and the navigation carries on.
+* Debug builds attach an inspector that posts every router event on the VM
+  service (`modulith_router:event`) and answers `ext.modulith_router.*`:
+  `listRouters`, `getState`, `getRouteTable`, `getNavigationTree` (frames,
+  navigators, pages, activations, and the stacks background branches retain)
+  and `getEventLog` (the last 500 events, so a tool that connects late sees
+  what it missed). Attached from inside an `assert`, so a release build has
+  no inspector, no log and no registered extensions.
+* A DevTools extension, shipped built in `extension/devtools`: opening
+  DevTools against a debug build adds a **modulith_router** tab. Nothing to
+  install; its source lives in `modulith_router_devtools/` in the repository.
+  * **Navigation** — the live navigator tree: outlets, pages, and the stacks
+    background branches retain, with the activation behind each page.
+  * **Route table** — the compiled table, filterable, plus a URL tester
+    (`ext.modulith_router.matchTrace`) that answers *without navigating*:
+    the chain that matched and its parameters, or every route the matcher
+    tried and where it gave up; the redirect hops and where they land; and
+    the guards that would run there.
+
 ## 0.1.1
 
 * Add an example: a single-file tour of persistent branch tabs, a push that

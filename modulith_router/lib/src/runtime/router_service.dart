@@ -11,14 +11,19 @@ import '../model/route_definition.dart';
 import '../model/route_error.dart';
 import '../model/route_match.dart';
 import '../model/route_matcher.dart';
+import '../devtools/router_inspector.dart';
 import '../model/router_state.dart';
 import 'activated_route.dart';
 import 'activation.dart';
 import 'guards.dart';
 import 'navigation_tree.dart';
 import 'navigation_result.dart';
+import 'router_observer.dart';
 
-enum _NavigationKind { go, push, replace }
+/// How [RouterService._apply] changes the stack. The public
+/// [NavigationKind] an observer sees is wider: it also names the caller a
+/// navigation came from.
+enum _ApplyKind { go, push, replace }
 
 /// The router itself: route table, navigation pipeline, and the
 /// [RouterConfig] the app hands to `MaterialApp.router`.
@@ -35,10 +40,12 @@ class RouterService extends Service {
   ///
   /// [initialLocation] is used only when the platform has no deep link of
   /// its own. [guards] run before the guards of every matched route.
+  /// [observers] are told what the pipeline decides, in order.
   RouterService({
     required List<RouteDefinition> routes,
     String initialLocation = '/',
     List<RouteGuard> guards = const [],
+    List<RouterObserver> observers = const [],
     RouteErrorBuilder? errorBuilder,
     RouteInformationProvider? routeInformationProvider,
     BackButtonDispatcher? backButtonDispatcher,
@@ -47,6 +54,8 @@ class RouterService extends Service {
   }) : _routeTable = routes,
        _defaultLocation = initialLocation,
        _globalGuards = guards,
+       // Growable: the DevTools inspector adds itself in debug builds.
+       _navigationObservers = List.of(observers),
        _notFoundBuilder = errorBuilder,
        _externalProvider = routeInformationProvider,
        _backButton = backButtonDispatcher,
@@ -56,6 +65,7 @@ class RouterService extends Service {
   final List<RouteDefinition> _routeTable;
   final String _defaultLocation;
   final List<RouteGuard> _globalGuards;
+  final List<RouterObserver> _navigationObservers;
   final RouteErrorBuilder? _notFoundBuilder;
   final RouteInformationProvider? _externalProvider;
   final BackButtonDispatcher? _backButton;
@@ -77,6 +87,7 @@ class RouterService extends Service {
   int _generation = 0;
   int _nextActivationId = 0;
   int _nextFrameId = 0;
+  int _nextNavigationId = 0;
   bool _isNavigating = false;
   Object? _pendingPopResult;
 
@@ -86,6 +97,15 @@ class RouterService extends Service {
   void init() {
     _matcher = RouteMatcher(_routeTable);
     _delegate = ModulithRouterDelegate(service: this, splash: _splashScreen);
+
+    // Debug builds only: in a release build the assert is stripped, so
+    // nothing observes, nothing is logged and no extension is registered.
+    assert(() {
+      final inspector = RouterInspector.attach(this, _navigation);
+      _navigationObservers.add(inspector);
+      addDisposeCallback(inspector.detach);
+      return true;
+    }());
 
     final provider =
         _externalProvider ??
@@ -149,6 +169,11 @@ class RouterService extends Service {
   /// The compiled route table.
   RouteMatcher get matcher => _matcher;
 
+  /// The guards that run before every navigation. Read by the DevTools
+  /// inspector, which shows them above the route table.
+  @internal
+  List<RouteGuard> get globalGuards => _globalGuards;
+
   /// The configuration reported to the platform, or `null` before the first
   /// navigation resolves.
   RouterState? get currentState => _frames.isEmpty
@@ -198,11 +223,8 @@ class RouterService extends Service {
   // ---------------------------------------------------------------------
 
   /// Navigates to [location], replacing the whole stack.
-  Future<NavigationResult> go(String location, {Object? extra}) => _navigate(
-    uri: _resolve(location),
-    kind: _NavigationKind.go,
-    extra: extra,
-  );
+  Future<NavigationResult> go(String location, {Object? extra}) =>
+      _navigate(uri: _resolve(location), kind: _ApplyKind.go, extra: extra);
 
   /// [go] for a named route.
   Future<NavigationResult> goNamed(
@@ -212,7 +234,7 @@ class RouterService extends Service {
     Object? extra,
   }) => _navigate(
     uri: uriFor(name, pathParams: pathParams, queryParameters: queryParameters),
-    kind: _NavigationKind.go,
+    kind: _ApplyKind.go,
     extra: extra,
   );
 
@@ -225,7 +247,7 @@ class RouterService extends Service {
     final completer = Completer<Object?>();
     final result = await _navigate(
       uri: _resolve(location),
-      kind: _NavigationKind.push,
+      kind: _ApplyKind.push,
       extra: extra,
       completer: completer,
     );
@@ -255,7 +277,7 @@ class RouterService extends Service {
   Future<NavigationResult> replace(String location, {Object? extra}) =>
       _navigate(
         uri: _resolve(location),
-        kind: _NavigationKind.replace,
+        kind: _ApplyKind.replace,
         extra: extra,
       );
 
@@ -269,7 +291,7 @@ class RouterService extends Service {
   /// Re-runs matching and guards on the current URL — what to call after a
   /// login changes what the guards would decide.
   Future<NavigationResult> refresh() =>
-      _navigate(uri: currentUri, kind: _NavigationKind.go);
+      _navigate(uri: currentUri, kind: _ApplyKind.go);
 
   /// Activates a persistent branch, restoring its last stack when available.
   Future<NavigationResult> switchBranch(
@@ -299,33 +321,105 @@ class RouterService extends Service {
     if (state == null) {
       throw StateError('The active branch outlet has not been initialized.');
     }
+
+    final navigation = _nextNavigationId++;
+    final watch = _isObserved ? (Stopwatch()..start()) : null;
+    // Read before the active branch's history is written back: for anything
+    // but a reset the two are different branches, and a reset ignores the
+    // cache anyway.
+    final cached = reset ? null : state.histories[name];
+    final initialTarget = _normalize(Uri.parse(branch.initialLocation));
+    if (watch != null) {
+      _emit(
+        NavigationStarted(
+          navigationId: navigation,
+          timestamp: DateTime.now(),
+          kind: NavigationKind.switchBranch,
+          from: currentUri,
+          to: cached?.last.uri ?? initialTarget,
+        ),
+      );
+    }
+
     if (!reset && state.activeBranch == name) {
-      return NavigationResult(NavigationOutcome.completed, currentUri);
+      return _finish(
+        navigation,
+        watch,
+        NavigationResult(NavigationOutcome.completed, currentUri),
+      );
     }
     if (!await _runDeactivationGuards()) {
-      return NavigationResult(NavigationOutcome.blocked, currentUri);
+      if (watch != null) {
+        _emit(
+          DeactivationBlocked(
+            navigationId: navigation,
+            timestamp: DateTime.now(),
+            uri: cached?.last.uri ?? initialTarget,
+          ),
+        );
+      }
+      return _finish(
+        navigation,
+        watch,
+        NavigationResult(NavigationOutcome.blocked, currentUri),
+      );
     }
 
     state.histories[state.activeBranch] = List.of(_frames);
-    final cached = reset ? null : state.histories[name];
-    final initialTarget = _normalize(Uri.parse(branch.initialLocation));
     final resolved = cached == null
         ? _matchFollowingRedirects(initialTarget)
         : null;
+    if (cached == null && watch != null) {
+      _emit(
+        RouteMatched(
+          navigationId: navigation,
+          timestamp: DateTime.now(),
+          uri: initialTarget,
+          matches: resolved?.matches,
+        ),
+      );
+    }
     if (cached == null && resolved == null) {
-      return NavigationResult(NavigationOutcome.blocked, initialTarget);
+      return _finish(
+        navigation,
+        watch,
+        NavigationResult(NavigationOutcome.blocked, initialTarget),
+      );
     }
     if (cached == null) {
       _requireBranchMatches(current.route, branch, resolved!.matches);
     }
     final targetMatches = cached?.last.matches ?? resolved!.matches;
     final targetUri = cached?.last.uri ?? resolved!.uri;
-    final decision = await _runGuards(targetMatches, targetUri, null);
+    final decision = await _runGuards(
+      targetMatches,
+      targetUri,
+      null,
+      navigation,
+    );
     if (decision is BlockGuardResult) {
-      return NavigationResult(NavigationOutcome.blocked, targetUri);
+      return _finish(
+        navigation,
+        watch,
+        NavigationResult(NavigationOutcome.blocked, targetUri),
+      );
     }
     if (decision case RedirectGuardResult(:final location)) {
-      return go(location);
+      final target = _resolve(location);
+      if (watch != null) {
+        _emit(
+          RedirectApplied(
+            navigationId: navigation,
+            timestamp: DateTime.now(),
+            from: targetUri,
+            to: target,
+            source: RedirectSource.guard,
+          ),
+        );
+      }
+      // The redirect is a navigation of its own, with its own id: it goes
+      // through `go`, which reports what it decides.
+      return _finish(navigation, watch, await go(location));
     }
 
     final history =
@@ -342,8 +436,12 @@ class RouterService extends Service {
     // The restored stack can host branch outlets of its own, whose state was
     // dropped while this branch was in the background.
     _syncBranchStates();
-    _publish();
-    return NavigationResult(NavigationOutcome.completed, currentUri);
+    _publish(navigation);
+    return _finish(
+      navigation,
+      watch,
+      NavigationResult(NavigationOutcome.completed, currentUri),
+    );
   }
 
   /// Builds the URL of a named route.
@@ -379,8 +477,9 @@ class RouterService extends Service {
     if (currentState == state) return;
     await _navigate(
       uri: _normalize(state.uri),
-      kind: _NavigationKind.go,
+      kind: _ApplyKind.go,
       extra: state.entries.last.extra,
+      fromPlatform: true,
     );
   }
 
@@ -491,11 +590,32 @@ class RouterService extends Service {
 
   Future<NavigationResult> _navigate({
     required Uri uri,
-    required _NavigationKind kind,
+    required _ApplyKind kind,
     Object? extra,
     Completer<Object?>? completer,
+    bool fromPlatform = false,
   }) async {
     final generation = ++_generation;
+    final navigation = _nextNavigationId++;
+    final watch = _isObserved ? (Stopwatch()..start()) : null;
+    if (watch != null) {
+      _emit(
+        NavigationStarted(
+          navigationId: navigation,
+          timestamp: DateTime.now(),
+          kind: fromPlatform
+              ? NavigationKind.platform
+              : switch (kind) {
+                  _ApplyKind.go => NavigationKind.go,
+                  _ApplyKind.push => NavigationKind.push,
+                  _ApplyKind.replace => NavigationKind.replace,
+                },
+          from: currentUri,
+          to: uri,
+          extra: extra,
+        ),
+      );
+    }
     _setNavigating(true);
 
     try {
@@ -506,21 +626,47 @@ class RouterService extends Service {
 
       while (true) {
         final matches = _matcher.match(target);
+        if (watch != null) {
+          _emit(
+            RouteMatched(
+              navigationId: navigation,
+              timestamp: DateTime.now(),
+              uri: target,
+              matches: matches,
+            ),
+          );
+        }
 
         if (matches == null) {
-          _apply(kind, target, const [], extra, completer);
-          return NavigationResult(
-            redirected
-                ? NavigationOutcome.redirected
-                : NavigationOutcome.completed,
-            target,
+          _apply(kind, target, const [], extra, completer, navigation);
+          return _finish(
+            navigation,
+            watch,
+            NavigationResult(
+              redirected
+                  ? NavigationOutcome.redirected
+                  : NavigationOutcome.completed,
+              target,
+            ),
           );
         }
 
         final redirect = _redirectTarget(matches, target);
         if (redirect != null) {
+          final from = target;
           target = _normalize(target.resolve(redirect));
           redirected = true;
+          if (watch != null) {
+            _emit(
+              RedirectApplied(
+                navigationId: navigation,
+                timestamp: DateTime.now(),
+                from: from,
+                to: target,
+                source: RedirectSource.route,
+              ),
+            );
+          }
           if (++redirects > _redirectLimit) {
             throw StateError(
               'Redirect loop after $_redirectLimit hops: '
@@ -532,31 +678,72 @@ class RouterService extends Service {
         }
 
         if (!await _runDeactivationGuards()) {
-          return NavigationResult(NavigationOutcome.blocked, target);
+          if (watch != null) {
+            _emit(
+              DeactivationBlocked(
+                navigationId: navigation,
+                timestamp: DateTime.now(),
+                uri: target,
+              ),
+            );
+          }
+          return _finish(
+            navigation,
+            watch,
+            NavigationResult(NavigationOutcome.blocked, target),
+          );
         }
         if (generation != _generation) {
-          return NavigationResult(NavigationOutcome.superseded, target);
+          return _finish(
+            navigation,
+            watch,
+            NavigationResult(NavigationOutcome.superseded, target),
+          );
         }
 
-        final decision = await _runGuards(matches, target, extra);
+        final decision = await _runGuards(matches, target, extra, navigation);
         if (generation != _generation) {
-          return NavigationResult(NavigationOutcome.superseded, target);
+          return _finish(
+            navigation,
+            watch,
+            NavigationResult(NavigationOutcome.superseded, target),
+          );
         }
 
         switch (decision) {
           case AllowGuardResult():
-            _apply(kind, target, matches, extra, completer);
-            return NavigationResult(
-              redirected
-                  ? NavigationOutcome.redirected
-                  : NavigationOutcome.completed,
-              target,
+            _apply(kind, target, matches, extra, completer, navigation);
+            return _finish(
+              navigation,
+              watch,
+              NavigationResult(
+                redirected
+                    ? NavigationOutcome.redirected
+                    : NavigationOutcome.completed,
+                target,
+              ),
             );
           case BlockGuardResult():
-            return NavigationResult(NavigationOutcome.blocked, target);
+            return _finish(
+              navigation,
+              watch,
+              NavigationResult(NavigationOutcome.blocked, target),
+            );
           case RedirectGuardResult(:final location):
+            final from = target;
             target = _normalize(target.resolve(location));
             redirected = true;
+            if (watch != null) {
+              _emit(
+                RedirectApplied(
+                  navigationId: navigation,
+                  timestamp: DateTime.now(),
+                  from: from,
+                  to: target,
+                  source: RedirectSource.guard,
+                ),
+              );
+            }
             if (++redirects > _redirectLimit) {
               throw StateError(
                 'Redirect loop after $_redirectLimit hops: '
@@ -569,6 +756,27 @@ class RouterService extends Service {
     } finally {
       if (generation == _generation) _setNavigating(false);
     }
+  }
+
+  /// Reports [result] as the end of navigation [navigation] and hands it
+  /// back, so every exit of the pipeline closes the navigation exactly once.
+  NavigationResult _finish(
+    int navigation,
+    Stopwatch? watch,
+    NavigationResult result,
+  ) {
+    if (watch != null) {
+      _emit(
+        NavigationEnded(
+          navigationId: navigation,
+          timestamp: DateTime.now(),
+          outcome: result.outcome,
+          uri: result.uri,
+          duration: watch.elapsed,
+        ),
+      );
+    }
+    return result;
   }
 
   String? _redirectTarget(List<RouteMatch> matches, Uri uri) {
@@ -591,22 +799,51 @@ class RouterService extends Service {
     List<RouteMatch> matches,
     Uri uri,
     Object? extra,
+    int navigation,
   ) async {
     for (final guard in _globalGuards) {
-      final result = await guard.canActivate(
+      final result = await _runGuard(
+        guard,
         _guardContext(uri, matches, matches.last, extra),
+        navigation,
+        null,
       );
       if (result is! AllowGuardResult) return result;
     }
     for (final match in matches) {
       for (final guard in match.definition.guards) {
-        final result = await guard.canActivate(
+        final result = await _runGuard(
+          guard,
           _guardContext(uri, matches, match, extra),
+          navigation,
+          match.route.debugPath,
         );
         if (result is! AllowGuardResult) return result;
       }
     }
     return GuardResult.allow;
+  }
+
+  Future<GuardResult> _runGuard(
+    RouteGuard guard,
+    GuardContext context,
+    int navigation,
+    String? routePath,
+  ) async {
+    if (!_isObserved) return guard.canActivate(context);
+    final watch = Stopwatch()..start();
+    final result = await guard.canActivate(context);
+    _emit(
+      GuardEvaluated(
+        navigationId: navigation,
+        timestamp: DateTime.now(),
+        guardType: guard.runtimeType,
+        routePath: routePath,
+        result: result,
+        duration: watch.elapsed,
+      ),
+    );
+    return result;
   }
 
   GuardContext _guardContext(
@@ -626,14 +863,15 @@ class RouterService extends Service {
       injectService<S>(name: name);
 
   void _apply(
-    _NavigationKind kind,
+    _ApplyKind kind,
     Uri uri,
     List<RouteMatch> matches,
     Object? extra,
     Completer<Object?>? completer,
+    int navigation,
   ) {
     switch (kind) {
-      case _NavigationKind.go:
+      case _ApplyKind.go:
         final previousHost = _frames.isEmpty
             ? null
             : _branchHost(_frames.last.matches);
@@ -656,9 +894,9 @@ class RouterService extends Service {
         _frames
           ..clear()
           ..add(frame);
-      case _NavigationKind.push:
+      case _ApplyKind.push:
         _frames.add(_buildPushFrame(uri, matches, extra, completer));
-      case _NavigationKind.replace:
+      case _ApplyKind.replace:
         // Reuse is measured against the frame being replaced, not against the
         // one below it: the replacement takes that frame's place, so every
         // shell it had opened above the frame below stays as it is instead of
@@ -689,7 +927,7 @@ class RouterService extends Service {
         );
     }
     _syncBranchStates();
-    _publish();
+    _publish(navigation);
   }
 
   void _syncBranchStates() {
@@ -985,13 +1223,39 @@ class RouterService extends Service {
     }
   }
 
+  /// Whether anything is watching. Every emission site checks this before
+  /// building an event, so a router without observers pays nothing for the
+  /// hook — not a stopwatch, not an allocation.
+  bool get _isObserved => _navigationObservers.isNotEmpty;
+
+  /// A broken observer must not break navigation, so one that throws is
+  /// reported and the rest still get the event.
+  void _emit(RouterEvent event) {
+    for (final observer in _navigationObservers) {
+      try {
+        observer.onEvent(event);
+      } catch (error, stack) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'modulith_router',
+            context: ErrorDescription('while notifying $observer of $event'),
+          ),
+        );
+      }
+    }
+  }
+
   void _setNavigating(bool value) {
     if (_isNavigating == value) return;
     _isNavigating = value;
     _notifyChanges();
   }
 
-  void _publish() {
+  /// [navigation] is the id of the navigation behind the change, or `null`
+  /// when a [Navigator] removed a page on its own.
+  void _publish([int? navigation]) {
     // A branch outlet the navigation just left for good takes its retained
     // histories with it; nothing will ever pop those frames again.
     for (final state in _navigation.rebuild()) {
@@ -1000,6 +1264,16 @@ class RouterService extends Service {
       }
     }
     _revision++;
+    if (_isObserved) {
+      _emit(
+        StackChanged(
+          timestamp: DateTime.now(),
+          navigationId: navigation,
+          revision: _revision,
+          uri: currentUri,
+        ),
+      );
+    }
     _delegate.notify();
     _notifyChanges();
   }

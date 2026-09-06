@@ -1,0 +1,26 @@
+name: modulith_router_devtools
+description: "The DevTools extension for modulith_router: the live navigator tree, the compiled route table, and a timeline of what the navigation pipeline decided."
+# Never published. The built web app is copied into
+# ../modulith_router/extension/devtools/build, which is what ships with the
+# router package and what DevTools loads.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.2
+  flutter: ">=3.27.1"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  devtools_app_shared: ^0.5.1
+  devtools_extensions: ^0.5.1
+  vm_service: ^15.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

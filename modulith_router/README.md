@@ -293,6 +293,62 @@ void init() {
 }
 ```
 
+## Observing navigation
+
+A `RouterObserver` is told what the pipeline decides, in order — which route
+table entry matched, which guard answered what and how long it took, where a
+redirect came from, and how the navigation ended:
+
+```dart
+RouterModule(
+  routes: appRoutes,
+  observers: const [LoggingRouterObserver()],
+  appBuilder: ...,
+)
+```
+
+Every event of one navigation call carries the same `navigationId`, so a
+consumer can group them:
+
+| Event | |
+| --- | --- |
+| `NavigationStarted` | the call, its `NavigationKind` and where it was headed |
+| `RouteMatched` | the matched chain, or `null` when nothing matched |
+| `RedirectApplied` | from, to, and whether a `RedirectRoute` or a guard decided |
+| `GuardEvaluated` | the guard, the route it is declared on, its answer, its duration |
+| `DeactivationBlocked` | a screen refused to be left |
+| `NavigationEnded` | the `NavigationOutcome` and the total duration |
+| `StackChanged` | the new revision; `navigationId` is `null` when a `Navigator` popped a page on its own |
+
+`onEvent` runs synchronously inside the pipeline, so keep it cheap and do not
+navigate from it. An observer that throws is reported through
+`FlutterError.reportError` and the navigation carries on — a broken logger
+must not break navigation. A router with no observers builds no events at all.
+
+## The DevTools extension
+
+A debug build registers an inspector of its own, so opening DevTools against
+any app that mounts a `RouterModule` adds a **modulith_router** tab. Nothing
+to install and nothing to configure: the extension ships inside this package.
+
+**Navigation** shows the live navigator tree — which pages belong to which
+`Navigator`, what an outlet opens, and the stack each background branch is
+holding on to, which is the part of the router nothing else can show you.
+Selecting a page describes the activation behind it: the route it matched,
+its parameters, the module mounted for it, its reuse policy, and the frame
+that owns it.
+
+**Route table** shows the compiled table, and answers "what would this URL
+do?" without doing it. Type a location and it reports the chain that matched
+and what it captured, or — when nothing matched — every route the matcher
+tried and where each one gave up, which is usually enough to see the typo.
+It also follows redirects to where the navigation would land, and lists the
+guards that would run there. Matching is a pure question, so asking it does
+not move the app.
+
+The inspector is attached from inside an `assert`, so a release build has no
+inspector, no event log and no registered service extensions.
+
 ## Matching
 
 Compiled once into a tree; a match costs the length of the URL, not the size

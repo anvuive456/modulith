@@ -1,9 +1,15 @@
 # A .pubignore replaces .gitignore for publishing, so everything that must
 # stay out of the archive has to be listed here, not just the extras.
+#
+# The build rules are anchored rather than a bare `build/`: the DevTools
+# extension ships as a built web app under `extension/devtools/build`, and any
+# `build/` rule reachable from here prunes that whole subtree from the
+# archive — a negation does not bring it back.
+/build/
+/example/build/
 .dart_tool/
 .fvm/
 .idea/
-build/
 coverage/
 pubspec.lock
 *.iml

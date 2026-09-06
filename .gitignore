@@ -20,7 +20,14 @@ migrate_working_dir/
 .packages
 .pub/
 .pub-cache/
-build/
+# Build output, anchored to each package rather than a bare `build/`, so that
+# the DevTools extension's *committed* build
+# (modulith_router/extension/devtools/build) is not swept up with it.
+# `modulith_router/.pubignore` restates these for `pub publish`, which prunes
+# a whole subtree on any `build/` rule it can reach and does not honour a
+# negation.
+/*/build/
+/*/example/build/
 coverage/
 doc/api/
 .flutter-plugins
