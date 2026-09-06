@@ -237,12 +237,21 @@ class TodoListView extends ModularWidget {
                 ),
                 title: Text(todo.title),
                 subtitle: Text('/todos/${todo.id}'),
-                // `push` resolves with whatever the detail passes to `pop`,
-                // so the list learns what happened without any shared state.
-                // It resolves with null when the screen is dismissed instead.
                 onTap: () async {
-                  final changed = await router.push<bool>('/todos/${todo.id}');
-                  if (changed ?? false) controller.reload();
+                  final done = await router.push<bool>('/todos/${todo.id}');
+                  if (done == null || !context.mounted) return;
+                  controller.reload();
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      duration: const Duration(seconds: 1),
+                      content: Text(
+                        done
+                            ? '${todo.title} — done'
+                            : '${todo.title} — not done',
+                      ),
+                    ),
+                  );
                 },
               ),
           ],
