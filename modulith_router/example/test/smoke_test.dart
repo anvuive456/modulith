@@ -22,6 +22,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
 
+    // And the same trip back the other way: a detail that answers `false` is
+    // an answer too, not a "nothing happened".
+    await tester.tap(find.text('Push a detail, then pop it with a value'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Back to the list'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byIcon(Icons.check_circle),
+      findsNothing,
+      reason: 'The list has to reload when a todo is unticked, too.',
+    );
+
     // The guarded branch redirects out of the shell.
     await tester.tap(find.text('Account'));
     await tester.pumpAndSettle();
