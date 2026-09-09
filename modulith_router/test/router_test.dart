@@ -989,4 +989,66 @@ void main() {
       expect(find.text('screen:user:9'), findsOneWidget);
     });
   });
+
+  group('the router as an exported child module', () {
+    testWidgets('a controller of the app module can inject the router', (
+      tester,
+    ) async {
+      await pumpModule(
+        tester,
+        AppShellModule([screen('/', 'home'), screen('/settings', 'settings')]),
+      );
+
+      // The controller resolved the router in init(), which runs while the
+      // app module's scope is being built — before ChildModuleView had a
+      // chance to mount RouterModule.
+      await AppShellController.last!.router.go('/settings');
+      await tester.pumpAndSettle();
+
+      expect(find.text('screen:settings'), findsOneWidget);
+    });
+
+    testWidgets('the app module and the router share one RouterService', (
+      tester,
+    ) async {
+      final router = await pumpModule(
+        tester,
+        AppShellModule([screen('/', 'home')]),
+      );
+
+      expect(identical(AppShellController.last!.router, router), isTrue);
+    });
+  });
+}
+
+/// Sits in the module that declares the router, and navigates from `init()` —
+/// before anything has mounted the `RouterModule` itself.
+class AppShellController extends Controller {
+  /// The last one built, so a test can reach it without a scope of its own.
+  static AppShellController? last;
+
+  late final RouterService router;
+
+  @override
+  void init() {
+    last = this;
+    router = injectService<RouterService>();
+  }
+}
+
+class AppShellModule extends Module {
+  AppShellModule(this.routes);
+
+  final List<RouteDefinition> routes;
+
+  @override
+  List<Module> get children => [routerModule(routes)];
+
+  @override
+  List<Provider<Controller>> get controllers => [
+    Provider<AppShellController>.singleton(create: AppShellController.new),
+  ];
+
+  @override
+  Widget get view => const ChildModuleView<RouterModule>();
 }

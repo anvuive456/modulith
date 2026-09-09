@@ -1,3 +1,15 @@
+## 0.3.0
+
+* `RouterService` and `RouterController` are exported (modulith 0.2.0), so
+  the module that declares `RouterModule` in its `children` owns them: a
+  controller of the app module can `injectService<RouterService>()` and
+  navigate from `init()`, without waiting for the router to be mounted.
+* Both now live as long as the module that declares the router, not as long
+  as the `RouterModule` mount. Mounting `RouterModule` on its own — as the
+  router's own tests do — is unchanged: with no ancestor declaring it, its
+  exports stay local.
+* Requires `modulith: ^0.2.0`.
+
 ## 0.2.0
 
 * `RouterObserver` — a hook on `RouterModule` and `RouterService` that

@@ -1,6 +1,6 @@
 name: modulith_router
 description: "Navigation 2.0 routing for modulith: nested route modules mounted through RoutingView outlets, with guards, deep links and scoped DI."
-version: 0.2.0
+version: 0.3.0
 repository: https://github.com/anvuive456/modulith
 issue_tracker: https://github.com/anvuive456/modulith/issues
 
@@ -14,7 +14,7 @@ dependencies:
   meta: ^1.9.0
   # Resolved from pub.dev when published; `pubspec_overrides.yaml` points it
   # back at ../modulith for work inside this repo.
-  modulith: ^0.1.0
+  modulith: ^0.2.0
 
 dev_dependencies:
   flutter_test:

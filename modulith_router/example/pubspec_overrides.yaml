@@ -1,0 +1,6 @@
+# Local development only: builds the example against the modulith sources in
+# this repo instead of the published version, the same way ../pubspec_overrides
+# does for the router package itself.
+dependency_overrides:
+  modulith:
+    path: ../../modulith

@@ -243,6 +243,23 @@ active. A route cannot declare both `children` and `branches`, and every
 `RouterService` is resolved like any other service: `context.router` from a
 widget, `injectService<RouterService>()` from a controller.
 
+`RouterService` and `RouterController` are `exported`, so the module that
+declares `RouterModule` in its `children` owns them. A controller of the app
+module can inject the router and navigate from `init()`, before anything has
+mounted the router:
+
+```dart
+class AppController extends Controller {
+  late final RouterService router;
+
+  @override
+  void init() => router = injectService<RouterService>();
+}
+```
+
+Both then live as long as that module, not as long as the `RouterModule`
+mount.
+
 | Method | |
 | --- | --- |
 | `go(location)` | replace the whole stack |

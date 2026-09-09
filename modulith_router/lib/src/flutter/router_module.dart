@@ -44,6 +44,11 @@ typedef RouterAppBuilder =
 /// Scopes then nest the way routes do: `AppModule` → `RouterModule` → each
 /// routed module, so a screen still resolves services declared at the app
 /// level.
+///
+/// [RouterService] and [RouterController] are exported, so the module that
+/// declares `RouterModule` in its `children` owns them: a controller of the
+/// app module can `injectService<RouterService>()` and navigate, without
+/// waiting for the router to be mounted.
 class RouterModule extends Module {
   /// Declares a router over [routes].
   RouterModule({
@@ -91,6 +96,7 @@ class RouterModule extends Module {
   @override
   List<Provider<Service>> get services => [
     Provider<RouterService>.singleton(
+      exported: true,
       create: () => RouterService(
         routes: routes,
         initialLocation: initialLocation,
@@ -106,7 +112,10 @@ class RouterModule extends Module {
 
   @override
   List<Provider<Controller>> get controllers => [
-    Provider<RouterController>.singleton(create: RouterController.new),
+    Provider<RouterController>.singleton(
+      create: RouterController.new,
+      exported: true,
+    ),
   ];
 
   @override

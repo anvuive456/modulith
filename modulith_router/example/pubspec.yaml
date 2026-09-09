@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  modulith: ^0.1.0
+  modulith: ^0.2.0
   modulith_router:
     path: ../
 
