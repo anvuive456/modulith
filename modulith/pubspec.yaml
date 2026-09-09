@@ -1,6 +1,6 @@
 name: modulith
 description: "A lightweight module system for Flutter: scoped controllers/services and reactive signals, composed as a tree of modules."
-version: 0.1.0
+version: 0.2.0
 
 repository: https://github.com/anvuive456/modulith
 issue_tracker: https://github.com/anvuive456/modulith/issues

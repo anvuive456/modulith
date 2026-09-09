@@ -13,6 +13,10 @@ state via `Signal`.
   Lookups match the type a provider is *registered under*, so register
   against the type callers ask for:
   `Provider<AuthService>.singleton(create: FirebaseAuth.new)`.
+- **Exported providers** — `Provider(..., exported: true)` hands a provider
+  to the scope of the module that declares its module in `children`, so a
+  parent's controllers and services can resolve it. The ancestor owns the
+  instance, and parent and child share it. See *Exported providers* below.
 - **ModuleScope** — owns provider instances, resolves through parent module
   scopes, and handles initialization and disposal. Lookups are indexed by
   type and name and memoized per scope, so walking up a deep module tree
@@ -143,9 +147,9 @@ class NameModule extends Module {
 const ChildModuleView<NameModule>()
 ```
 
-`Module.children` is read once per mount, and a `Module` instance backs
-exactly one live scope — mounting the same instance in two places at once
-throws. Return fresh instances from the getter:
+`Module.children` is read once per module instance and cached, and a
+`Module` instance backs exactly one live scope — mounting the same instance
+in two places at once throws. Return fresh instances from the getter:
 
 ```dart
 class SplitModule extends Module {
@@ -194,6 +198,70 @@ class TodoModule extends Module {
   Widget get view => const TodoPage();
 }
 ```
+
+### Exported providers
+
+Lookups only travel **up** the module tree, so a parent can't reach what a
+child registers. Marking a provider `exported` hands it to the scope of the
+module that declares that child, which then owns it:
+
+```dart
+class RouterModule extends Module {
+  @override
+  List<Provider<Service>> get services => [
+    Provider<RouterService>.singleton(
+      create: RouterService.new,
+      exported: true,
+    ),
+  ];
+
+  @override
+  Widget get view => const RouterAppView();
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get children => [RouterModule()];
+
+  @override
+  List<Provider<Controller>> get controllers => [
+    Provider<AppController>.singleton(create: AppController.new),
+  ];
+
+  @override
+  Widget get view => const ChildModuleView<RouterModule>();
+}
+
+class AppController extends Controller {
+  late final RouterService router;
+
+  // Resolves even though RouterModule has not been mounted yet: AppModule's
+  // scope owns the instance.
+  @override
+  void init() => router = injectService<RouterService>();
+}
+```
+
+Ownership really does move up, which is the whole point and the whole catch:
+
+- the instance lives as long as the ancestor's scope, not as long as the
+  mount of the module that declares it. Parent and child resolve the same
+  object — the export is removed from the declaring scope, so there is no
+  way to end up with two;
+- it is attached to the ancestor's scope, so what it injects has to be
+  resolvable from there. An exported provider can't depend on a provider its
+  own module keeps private;
+- it is overridden on the module that owns it, not on the one that declares
+  it. Overriding it on the declaring module throws and says so;
+- colliding with the ancestor's own registration of the same type and name,
+  or with a sibling exporting the same type and name, throws at mount — the
+  way two registrations in one module already do. Give one a provider `name`
+  if both are meant to exist.
+
+An export travels as far up as there is a scope to receive it, passing
+through modules that declare nothing themselves. Only `children` is read
+this way: a module mounted some other way — a routed module built per
+navigation — has no declaring ancestor, so its exports stay local.
 
 ### Factory lifetimes
 

@@ -2,6 +2,7 @@ import 'package:meta/meta.dart';
 
 import 'controller.dart';
 import 'module.dart';
+import 'module_declarations.dart';
 import 'module_member.dart';
 import 'provider.dart';
 import 'service.dart';
@@ -15,17 +16,42 @@ import 'service.dart';
 final class ModuleScope {
   /// Creates a scope for [module], nested under [parent] if there is one.
   ///
-  /// Each entry in [overrides] replaces a provider declared by [module] with
+  /// The scope owns what [module] declares, plus every provider marked
+  /// [Provider.exported] anywhere in [Module.children] below it that no
+  /// ancestor scope has already claimed — those modules declare the
+  /// provider, this scope creates and disposes the instance.
+  ///
+  /// Each entry in [overrides] replaces a provider owned by this scope with
   /// the same type and name — the hook for swapping in fakes from a test.
   /// An override that matches nothing is an error, so a stale test double
-  /// fails loudly instead of being silently ignored.
+  /// fails loudly instead of being silently ignored. An exported provider is
+  /// overridden here, on the scope that ended up owning it, not on the
+  /// module that declares it.
   ModuleScope({
     required this.module,
     this.parent,
     List<Provider<Object>> overrides = const [],
-  }) : children = List.unmodifiable(module.children),
-       _controllerProviders = _applyOverrides(module.controllers, overrides),
-       _serviceProviders = _applyOverrides(module.services, overrides) {
+  }) {
+    final declarations = ModuleDeclarations.of(module);
+    children = declarations.children;
+
+    // A provider an ancestor exported out of this module belongs to that
+    // ancestor now; keeping it here too would build a second instance.
+    final controllers = <Provider<Controller>>[];
+    final services = <Provider<Service>>[];
+    final exportedAway = <Provider<Object>>[];
+    for (final provider in declarations.controllers) {
+      (_isOwnedByAncestor(provider) ? exportedAway : controllers).add(provider);
+    }
+    for (final provider in declarations.services) {
+      (_isOwnedByAncestor(provider) ? exportedAway : services).add(provider);
+    }
+    _exportedAway = List.unmodifiable(exportedAway);
+
+    _collectExports(children, controllers, services);
+
+    _controllerProviders = _applyOverrides(controllers, overrides);
+    _serviceProviders = _applyOverrides(services, overrides);
     _controllerIndex = _indexProviders(_controllerProviders, 'controller');
     _serviceIndex = _indexProviders(_serviceProviders, 'service');
     _childIndex = _indexChildren(children, module);
@@ -40,10 +66,19 @@ final class ModuleScope {
 
   /// The child modules declared by [module], mountable with
   /// `ChildModuleView`.
-  final List<Module> children;
+  late final List<Module> children;
 
-  final List<Provider<Controller>> _controllerProviders;
-  final List<Provider<Service>> _serviceProviders;
+  late final List<Provider<Controller>> _controllerProviders;
+  late final List<Provider<Service>> _serviceProviders;
+
+  // What this scope hoisted out of the modules below it. Matched by
+  // identity: the declaring module's own scope has to recognise the very
+  // same `Provider` object, which `ModuleDeclarations` guarantees.
+  final Set<Provider<Object>> _hoisted = Set.identity();
+
+  // The other side of that: what an ancestor hoisted out of this module.
+  // Only used to explain an override aimed at a provider that has moved.
+  late final List<Provider<Object>> _exportedAway;
 
   // Declaration-order lists are what a lookup falls back to; these indexes
   // make the common exact-type case a single map read.
@@ -212,6 +247,64 @@ final class ModuleScope {
 
   bool get _isUsable => _active && !_disposed;
 
+  /// Walks the declared module tree below [children] and claims every
+  /// provider marked [Provider.exported].
+  ///
+  /// The walk is depth-first over `Module.children`, so an export travels
+  /// as far up as there is a scope to receive it: the first scope built on
+  /// the path — the outermost one — takes it, and every scope built below
+  /// then skips it through [_isOwnedByAncestor].
+  void _collectExports(
+    List<Module> children,
+    List<Provider<Controller>> controllers,
+    List<Provider<Service>> services,
+  ) {
+    for (final child in children) {
+      final declarations = ModuleDeclarations.of(child);
+      for (final provider in declarations.controllers) {
+        if (provider.exported && !_isOwnedByAncestor(provider)) {
+          controllers.add(provider);
+          _hoisted.add(provider);
+        }
+      }
+      for (final provider in declarations.services) {
+        if (provider.exported && !_isOwnedByAncestor(provider)) {
+          services.add(provider);
+          _hoisted.add(provider);
+        }
+      }
+      _collectExports(declarations.children, controllers, services);
+    }
+  }
+
+  bool _isOwnedByAncestor(Provider<Object> provider) {
+    ModuleScope? scope = parent;
+    while (scope != null) {
+      if (scope._hoisted.contains(provider)) return true;
+      scope = scope.parent;
+    }
+    return false;
+  }
+
+  /// The module that declares [provider], for error messages about a
+  /// provider this scope hoisted out of the tree below it.
+  Module? _declaringModule(Provider<Object> provider) {
+    Module? search(List<Module> children) {
+      for (final child in children) {
+        final declarations = ModuleDeclarations.of(child);
+        if (declarations.controllers.any((p) => identical(p, provider)) ||
+            declarations.services.any((p) => identical(p, provider))) {
+          return child;
+        }
+        final found = search(declarations.children);
+        if (found != null) return found;
+      }
+      return null;
+    }
+
+    return search(children);
+  }
+
   void _clearMount() {
     if (identical(_activeMounts[module], this)) _activeMounts[module] = null;
   }
@@ -257,9 +350,10 @@ final class ModuleScope {
     }
 
     throw StateError(
-      name == null
-          ? '${kind.label} of type $T not found'
-          : '${kind.label} "$name" of type $T not found',
+      '${name == null ? '${kind.label} of type $T' : '${kind.label} "$name" of type $T'}'
+      ' not found from ${module.runtimeType}. Lookups only travel up the '
+      'module tree: if a module below declares it, mark that provider '
+      '`exported: true`.',
     );
   }
 
@@ -417,31 +511,57 @@ final class ModuleScope {
       final applied =
           _controllerProviders.any((p) => identical(p, override)) ||
           _serviceProviders.any((p) => identical(p, override));
-      if (!applied) {
-        throw StateError(
-          'Override for ${_describe(override.valueType, override.name)} does '
-          'not match any provider declared by ${module.runtimeType}',
-        );
-      }
+      if (applied) continue;
+
+      final exported = _exportedAway.any(
+        (p) => p.valueType == override.valueType && p.name == override.name,
+      );
+      throw StateError(
+        exported
+            ? 'Override for ${_describe(override.valueType, override.name)} '
+                  'cannot be applied to ${module.runtimeType}: the provider is '
+                  'exported, so an ancestor module owns it. Override it where '
+                  'that module is mounted.'
+            : 'Override for ${_describe(override.valueType, override.name)} '
+                  'does not match any provider declared by '
+                  '${module.runtimeType}',
+      );
     }
   }
 
-  static Map<(Type, String?), Provider<T>> _indexProviders<T extends Object>(
+  Map<(Type, String?), Provider<T>> _indexProviders<T extends Object>(
     List<Provider<T>> providers,
     String typeLabel,
   ) {
     final index = <(Type, String?), Provider<T>>{};
     for (final provider in providers) {
       final key = (provider.valueType, provider.name);
-      if (index.containsKey(key)) {
+      final clash = index[key];
+      if (clash != null) {
         throw StateError(
           'Duplicate $typeLabel provider for '
-          '${_describe(provider.valueType, provider.name)}',
+          '${_describe(provider.valueType, provider.name)} in '
+          '${module.runtimeType}${_clashOrigin(clash, provider)}',
         );
       }
       index[key] = provider;
     }
     return index;
+  }
+
+  /// Names the modules behind a duplicate registration, so an export
+  /// colliding with something already registered here says where it came
+  /// from instead of pointing at a module that only declares it once.
+  String _clashOrigin<T extends Object>(Provider<T> first, Provider<T> second) {
+    final origins = [
+      for (final provider in [first, second])
+        if (_hoisted.contains(provider))
+          '${_declaringModule(provider)?.runtimeType ?? 'a child module'} '
+              'exports it',
+    ];
+    if (origins.isEmpty) return '';
+    return '. ${origins.join(' and ')} — rename one with a provider `name`, '
+        'or drop `exported: true`';
   }
 
   static Map<(Type, String?), Module> _indexChildren(

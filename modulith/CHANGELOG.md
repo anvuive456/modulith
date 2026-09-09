@@ -1,3 +1,26 @@
+## 0.2.0
+
+* `Provider(..., exported: true)` — hands a provider to the scope of the
+  module that declares this one in `children`, so a controller or service of
+  a parent module can resolve what a module below it registers. Lookups
+  themselves still only travel up; the provider is hoisted once, when the
+  ancestor scope is built.
+* An exported provider is *owned* by the ancestor: created there, disposed
+  with it, and resolvable while the module that declares it is not mounted.
+  Parent and child resolve the same instance — the export is removed from
+  the declaring scope, so there is no way to end up with two.
+* An export travels as far up as there is a scope to receive it, through
+  modules that declare no provider of their own. It is overridden on the
+  module that owns it, and colliding with an ancestor's registration or with
+  a sibling's export throws at mount, like a duplicate registration already
+  did.
+* Module declarations (`children`, `controllers`, `services`) are now read
+  once per module *instance* and cached, instead of once per mount. Exported
+  providers are collected before the declaring module is mounted, and both
+  reads have to see the same `Provider` objects.
+* "Not found" now says the lookup only travels up, and points at
+  `exported: true`.
+
 ## 0.1.0
 
 * Declare module views, controllers, services, and children through getters.
